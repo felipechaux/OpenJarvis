@@ -775,12 +775,52 @@ async def transcribe_speech(request: Request):
 async def speech_health(request: Request):
     """Check if a speech backend is available."""
     backend = getattr(request.app.state, "speech_backend", None)
-    if backend is None:
-        return {"available": False, "reason": "No speech backend configured"}
+    tts = getattr(request.app.state, "tts_backend", None)
     return {
-        "available": backend.health(),
-        "backend": backend.backend_id,
+        "available": backend.health() if backend else False,
+        "backend": backend.backend_id if backend else None,
+        "tts_available": tts.health() if tts else False,
+        "tts_backend": tts.backend_id if tts else None,
     }
+
+
+@speech_router.post("/synthesize")
+async def synthesize_speech(request: Request):
+    """Synthesize text to speech audio using the configured TTS backend."""
+    from fastapi.responses import Response
+
+    tts = getattr(request.app.state, "tts_backend", None)
+    if tts is None:
+        raise HTTPException(status_code=501, detail="TTS backend not configured")
+
+    body = await request.json()
+    text: str = body.get("text", "").strip()
+    # Default to JARVIS British voice; fall back to kokoro default if not edge-tts
+    default_voice = "en-GB-RyanNeural" if tts.backend_id == "edge_tts" else "af_heart"
+    voice_id: str = body.get("voice_id", default_voice)
+    speed: float = float(body.get("speed", 1.0))
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing 'text' field")
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    # edge-tts outputs MP3; kokoro outputs WAV
+    fmt = "mp3" if tts.backend_id == "edge_tts" else "wav"
+    result = await loop.run_in_executor(
+        None, lambda: tts.synthesize(text, voice_id=voice_id, speed=speed, output_format=fmt)
+    )
+    media_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
+    return Response(content=result.audio, media_type=media_type)
+
+
+@speech_router.get("/tts/voices")
+async def tts_voices(request: Request):
+    """Return available TTS voices."""
+    tts = getattr(request.app.state, "tts_backend", None)
+    if tts is None:
+        return {"voices": []}
+    return {"voices": tts.available_voices()}
 
 
 # ---- Feedback routes ----

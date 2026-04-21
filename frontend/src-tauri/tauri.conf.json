@@ -12,20 +12,23 @@
   "app": {
     "windows": [
       {
-        "title": "OpenJarvis",
-        "width": 1280,
-        "height": 800,
+        "title": "J.A.R.V.I.S",
+        "width": 1340,
+        "height": 860,
         "minWidth": 900,
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "decorations": true,
-        "transparent": false
+        "decorations": false,
+        "transparent": true,
+        "shadow": true,
+        "titleBarStyle": "Overlay"
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:"
-    }
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:* http://127.0.0.1:*"
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
@@ -64,7 +67,9 @@
     },
     "deep-link": {
       "desktop": {
-        "schemes": ["openjarvis"]
+        "schemes": [
+          "openjarvis"
+        ]
       }
     }
   }

@@ -9,98 +9,8 @@ use tokio::sync::Mutex;
 const OLLAMA_PORT: u16 = 11434;
 const JARVIS_PORT: u16 = 8000;
 
-/// Small, fast model pulled at startup so the app opens quickly.
-const STARTUP_MODEL: &str = "qwen3.5:4b";
-
-/// Tiny fallback model if even the startup model can't be pulled.
-const FALLBACK_MODEL: &str = "qwen3:0.6b";
-
-/// Qwen3.5 model variants, ordered smallest to largest.
-/// Each entry is (ollama_tag, approximate_download_size_gb, min_ram_gb).
-const QWEN35_MODELS: &[(&str, f64, f64)] = &[
-    ("qwen3.5:0.8b", 1.0, 4.0),
-    ("qwen3.5:2b", 2.7, 6.0),
-    ("qwen3.5:4b", 3.4, 8.0),
-    ("qwen3.5:9b", 6.6, 12.0),
-    ("qwen3.5:27b", 17.0, 24.0),
-    ("qwen3.5:35b", 24.0, 32.0),
-    ("qwen3.5:122b", 81.0, 96.0),
-];
-
-/// Get total system RAM in GB.
-fn total_ram_gb() -> f64 {
-    #[cfg(target_os = "macos")]
-    {
-        use std::process::Command;
-        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
-            if let Ok(s) = String::from_utf8(output.stdout) {
-                if let Ok(bytes) = s.trim().parse::<u64>() {
-                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
-                }
-            }
-        }
-    }
-    #[cfg(target_os = "linux")]
-    {
-        if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
-            for line in contents.lines() {
-                if line.starts_with("MemTotal:") {
-                    if let Some(kb_str) = line.split_whitespace().nth(1) {
-                        if let Ok(kb) = kb_str.parse::<u64>() {
-                            return kb as f64 / (1024.0 * 1024.0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(target_os = "windows")]
-    {
-        use std::process::Command;
-        // wmic returns TotalVisibleMemorySize in KB
-        if let Ok(output) = Command::new("wmic")
-            .args(["OS", "get", "TotalVisibleMemorySize", "/value"])
-            .output()
-        {
-            if let Ok(s) = String::from_utf8(output.stdout) {
-                for line in s.lines() {
-                    if let Some(val) = line.strip_prefix("TotalVisibleMemorySize=") {
-                        if let Ok(kb) = val.trim().parse::<u64>() {
-                            return kb as f64 / (1024.0 * 1024.0);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    8.0
-}
-
-/// Return the list of Qwen3.5 models that fit on this machine, smallest first.
-fn models_that_fit() -> Vec<&'static str> {
-    let ram = total_ram_gb();
-    QWEN35_MODELS
-        .iter()
-        .filter(|(_, _, min_ram)| ram >= *min_ram)
-        .map(|(tag, _, _)| *tag)
-        .collect()
-}
-
-/// Pick the default model — prefers STARTUP_MODEL if it fits, otherwise
-/// falls back to the third-largest model that fits on this machine.
-fn preferred_model() -> &'static str {
-    let fitting = models_that_fit();
-    // Prefer STARTUP_MODEL when it fits (fast, good quality)
-    if fitting.contains(&STARTUP_MODEL) {
-        return STARTUP_MODEL;
-    }
-    match fitting.len() {
-        0 => FALLBACK_MODEL,
-        1 => fitting[0],
-        2 => fitting[0],
-        n => fitting[n - 3], // third-largest
-    }
-}
+/// Default model — OpenRouter auto selects the best model per task.
+const DEFAULT_MODEL: &str = "openrouter/auto";
 
 /// Get the user home directory, handling both Unix (HOME) and Windows (USERPROFILE).
 fn home_dir() -> String {
@@ -387,6 +297,7 @@ async fn ollama_has_model(model: &str) -> bool {
     false
 }
 
+
 async fn pull_model(model: &str) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{}/api/pull", OLLAMA_PORT);
     let client = reqwest::Client::builder()
@@ -409,81 +320,38 @@ async fn pull_model(model: &str) -> Result<(), String> {
 // Backend boot sequence (runs in background after app launch)
 // ---------------------------------------------------------------------------
 
+/// Return true if ~/.openjarvis/cloud-keys.env has at least one API key set.
+
 async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
-    // Phase 1: Start Ollama
+    // Phase 1: Ensure Ollama is running (for local models).
+    // We don't pull any specific model — the user manages their own local models.
     {
         let mut s = status.lock().await;
         s.phase = "ollama".into();
         s.detail = "Starting inference engine...".into();
     }
 
-    // Try the bundled sidecar first, fall back to system ollama
-    let ollama_child = {
-        let ollama_bin = resolve_bin("ollama");
-        let sidecar = tokio::process::Command::new(&ollama_bin)
-            .arg("serve")
-            .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT))
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        match sidecar {
-            Ok(child) => Some(child),
-            Err(_) => None,
-        }
-    };
-
-    if let Some(child) = ollama_child {
+    let ollama_bin = resolve_bin("ollama");
+    let sidecar = tokio::process::Command::new(&ollama_bin)
+        .arg("serve")
+        .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(child) = sidecar {
         backend.lock().await.ollama = Some(ChildHandle { child });
     }
 
+    // Wait up to 10 s for Ollama — it's optional, cloud still works without it.
     let ollama_url = format!("http://127.0.0.1:{}/api/tags", OLLAMA_PORT);
-    let ollama_ok = wait_for_url(&ollama_url, Duration::from_secs(30)).await;
-
-    if !ollama_ok {
-        let mut s = status.lock().await;
-        s.error = Some("Could not start Ollama. Install it from https://ollama.com".into());
-        return;
-    }
+    let _ = wait_for_url(&ollama_url, Duration::from_secs(10)).await;
 
     {
         let mut s = status.lock().await;
         s.ollama_ready = true;
-        s.detail = "Inference engine ready.".into();
-    }
-
-    // Phase 2: Pull one small model (qwen3.5:2b) so the app can open fast.
-    // Remaining models are pulled in the background after the server starts.
-    {
-        let mut s = status.lock().await;
-        s.phase = "model".into();
-        s.detail = format!("Checking for {}...", STARTUP_MODEL);
-    }
-
-    if !ollama_has_model(STARTUP_MODEL).await {
-        {
-            let mut s = status.lock().await;
-            s.detail = format!("Downloading {}... (this may take a minute)", STARTUP_MODEL);
-        }
-        if let Err(e) = pull_model(STARTUP_MODEL).await {
-            // If the startup model fails, try the tiny fallback
-            eprintln!("Warning: failed to pull {}: {}", STARTUP_MODEL, e);
-            if !ollama_has_model(FALLBACK_MODEL).await {
-                let mut s = status.lock().await;
-                s.detail = format!("Downloading {}...", FALLBACK_MODEL);
-                drop(s);
-                if let Err(e2) = pull_model(FALLBACK_MODEL).await {
-                    let mut s = status.lock().await;
-                    s.error = Some(format!("Failed to download model: {}", e2));
-                    return;
-                }
-            }
-        }
-    }
-
-    {
-        let mut s = status.lock().await;
         s.model_ready = true;
-        s.detail = "Model ready.".into();
+        s.phase = "server".into();
+        s.detail = "Starting API server...".into();
     }
 
     // Phase 3: Start jarvis serve
@@ -631,16 +499,6 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         }
     }
 
-    // Start with STARTUP_MODEL (just pulled) or preferred if already available.
-    let pref = preferred_model();
-    let startup_model = if ollama_has_model(pref).await {
-        pref
-    } else if ollama_has_model(STARTUP_MODEL).await {
-        STARTUP_MODEL
-    } else {
-        FALLBACK_MODEL
-    };
-
     let root = project_root.as_ref().unwrap();
 
     // Install dependencies automatically (handles fresh clones)
@@ -654,6 +512,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             "--extra", "server",
             "--extra", "inference-cloud",
             "--extra", "inference-google",
+            "--extra", "speech",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -663,11 +522,7 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
 
     {
         let mut s = status.lock().await;
-        s.detail = format!(
-            "Starting server with {} from {}...",
-            startup_model,
-            root.display(),
-        );
+        s.detail = format!("Starting server with {} from {}...", DEFAULT_MODEL, root.display());
     }
 
     let mut cmd = tokio::process::Command::new(&uv_bin);
@@ -675,10 +530,12 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         "run",
         "jarvis",
         "serve",
+        "--host",
+        "127.0.0.1",
         "--port",
         &JARVIS_PORT.to_string(),
         "--model",
-        startup_model,
+        DEFAULT_MODEL,
         "--agent",
         "simple",
     ])
@@ -750,19 +607,6 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = "All systems ready.".into();
     }
 
-    // Phase 4: Pull remaining Qwen3.5 models in the background.
-    // The app is already usable with qwen3.5:2b; as each model finishes
-    // it appears in the model list automatically.
-    let fitting = models_that_fit();
-    tokio::spawn(async move {
-        for model in fitting {
-            if model != STARTUP_MODEL && model != FALLBACK_MODEL {
-                if !ollama_has_model(model).await {
-                    let _ = pull_model(model).await;
-                }
-            }
-        }
-    });
 }
 
 // ---------------------------------------------------------------------------

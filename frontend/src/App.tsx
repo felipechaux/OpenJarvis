@@ -59,7 +59,11 @@ export default function App() {
     fetchModels()
       .then((m) => {
         setModels(m);
-        if (!selectedModel && m.length > 0) setSelectedModel(m[0].id);
+        const ids = new Set(m.map((x) => x.id));
+        // Reset selection if the persisted model is no longer available
+        if (!selectedModel || !ids.has(selectedModel)) {
+          if (m.length > 0) setSelectedModel(m[0].id);
+        }
       })
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));

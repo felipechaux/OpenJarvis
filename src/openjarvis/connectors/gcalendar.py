@@ -230,29 +230,37 @@ class GCalendarConnector(BaseConnector):
         """Delete the stored credentials file."""
         delete_tokens(self._credentials_path)
 
-    def auth_url(self) -> str:
-        """Return a Google OAuth consent URL requesting ``calendar.readonly`` scope."""
+    def auth_url(self, redirect_uri: Optional[str] = None) -> str:
+        """Return a Google OAuth consent URL requesting ``calendar.readonly`` scope.
+
+        Parameters
+        ----------
+        redirect_uri:
+            OAuth callback URL. If provided, overrides the default localhost loopback.
+        """
         tokens = load_tokens(self._credentials_path)
         client_id = ""
         if tokens:
             client_id = tokens.get("client_id", "")
         if not client_id:
             return "https://console.cloud.google.com/apis/credentials"
+
+        from openjarvis.connectors.oauth import _DEFAULT_REDIRECT_URI
+
         return build_google_auth_url(
             client_id=client_id,
             scopes=GOOGLE_ALL_SCOPES,
+            redirect_uri=redirect_uri or _DEFAULT_REDIRECT_URI,
         )
 
     def handle_callback(self, code: str) -> None:
-        """Handle the OAuth callback.
+        """Handle the OAuth callback / manual credential entry.
 
-        If *code* looks like a ``client_id:client_secret`` pair (containing
-        ``.apps.googleusercontent.com``), store the credentials and trigger
-        the full browser-based OAuth flow.  Otherwise treat it as a raw
-        token / auth code.
+        This is kept for backward compatibility with CLI-based flows.
+        For server-managed flows, the token exchange is handled by the router.
         """
         code = code.strip()
-        # If user pastes client_id:client_secret, store and run OAuth flow
+        # If user pastes client_id:client_secret, store them
         if ":" in code and ".apps.googleusercontent.com" in code:
             client_id, client_secret = code.split(":", 1)
             save_tokens(
@@ -262,20 +270,6 @@ class GCalendarConnector(BaseConnector):
                     "client_secret": client_secret.strip(),
                 },
             )
-            import threading
-
-            def _run() -> None:
-                try:
-                    run_oauth_flow(
-                        client_id=client_id.strip(),
-                        client_secret=client_secret.strip(),
-                        scopes=GOOGLE_ALL_SCOPES,
-                        credentials_path=self._credentials_path,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-
-            threading.Thread(target=_run, daemon=True).start()
         else:
             # Raw token or auth code
             save_tokens(self._credentials_path, {"token": code})

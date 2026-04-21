@@ -150,6 +150,7 @@ def create_app(
     config=None,
     memory_backend=None,
     speech_backend=None,
+    tts_backend=None,
     agent_manager=None,
     agent_scheduler=None,
     api_key: str = "",
@@ -203,6 +204,7 @@ def create_app(
     app.state.config = config
     app.state.memory_backend = memory_backend
     app.state.speech_backend = speech_backend
+    app.state.tts_backend = tts_backend
     app.state.agent_manager = agent_manager
     app.state.agent_scheduler = agent_scheduler
     app.state.session_start = time.time()
