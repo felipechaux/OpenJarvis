@@ -1,10 +1,11 @@
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
+import { ArcReactor } from './ArcReactor';
 import { useAppStore } from '../../lib/store';
-import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
+import { PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
 
 function getGreeting(): string {
@@ -19,6 +20,8 @@ export function ChatArea() {
   const streamState = useAppStore((s) => s.streamState);
   const systemPanelOpen = useAppStore((s) => s.systemPanelOpen);
   const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
+  const ttsSpeaking = useAppStore((s) => s.ttsSpeaking);
+  const ttsAudioData = useAppStore((s) => s.ttsAudioData);
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -98,62 +101,113 @@ export function ChatArea() {
         className="flex-1 overflow-y-auto"
       >
         {isEmpty ? (
-          <div className="flex flex-col items-center justify-center h-full px-4">
-            <div
-              className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
-              style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}
-            >
-              <Sparkles size={24} />
+          /* ── Empty state: full-center arc reactor ── */
+          <div className="flex flex-col items-center justify-center h-full px-4 select-none">
+            <div style={{ marginBottom: 32, position: 'relative' }}>
+              <ArcReactor size={260} streaming={streamState.isStreaming} audioData={ttsAudioData} />
+              {/* Greeting floats below the reactor */}
             </div>
-            <h2 className="text-xl font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
-              {getGreeting()}
-            </h2>
-            <p className="text-sm text-center max-w-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>
-              Ask anything. Your AI runs locally — private, fast, and always available.
-            </p>
+
+            <div className="flex flex-col items-center gap-1 mb-8" style={{ animation: 'jarvis-msg-in 0.5s ease-out both 0.2s', opacity: 0 }}>
+              <h2
+                style={{
+                  fontFamily: 'var(--font-hud)',
+                  fontSize: '1.05rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.18em',
+                  color: 'var(--color-accent)',
+                  textShadow: '0 0 20px var(--color-accent-glow)',
+                  textTransform: 'uppercase',
+                }}
+              >
+                {getGreeting()}
+              </h2>
+              <p className="text-xs text-center max-w-xs" style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.05em' }}>
+                ALL SYSTEMS OPERATIONAL · AWAITING INPUT
+              </p>
+            </div>
 
             {/* Quick action hints */}
-            <div className="flex gap-3">
+            <div className="flex gap-3" style={{ animation: 'jarvis-msg-in 0.5s ease-out both 0.4s', opacity: 0 }}>
               <button
                 onClick={() => navigate('/data-sources')}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-colors"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-all"
                 style={{
-                  background: 'var(--color-bg-secondary)',
-                  border: '1px solid var(--color-border)',
+                  background: 'rgba(0,212,255,0.04)',
+                  border: '1px solid rgba(0,212,255,0.18)',
                   color: 'var(--color-text-secondary)',
+                  fontFamily: 'var(--font-hud)',
+                  letterSpacing: '0.06em',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-accent)')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-border)')}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(0,212,255,0.5)';
+                  e.currentTarget.style.background = 'rgba(0,212,255,0.08)';
+                  e.currentTarget.style.boxShadow = '0 0 16px -4px rgba(0,212,255,0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(0,212,255,0.18)';
+                  e.currentTarget.style.background = 'rgba(0,212,255,0.04)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
               >
-                <Database size={14} style={{ color: 'var(--color-accent)' }} />
-                Connect Data Sources
+                <Database size={13} style={{ color: 'var(--color-accent)' }} />
+                DATA SOURCES
               </button>
               <button
                 onClick={() => { navigate('/data-sources'); setTimeout(() => window.dispatchEvent(new CustomEvent('switch-tab', { detail: 'messaging' })), 100); }}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-colors"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-lg text-xs cursor-pointer transition-all"
                 style={{
-                  background: 'var(--color-bg-secondary)',
-                  border: '1px solid var(--color-border)',
+                  background: 'rgba(0,212,255,0.04)',
+                  border: '1px solid rgba(0,212,255,0.18)',
                   color: 'var(--color-text-secondary)',
+                  fontFamily: 'var(--font-hud)',
+                  letterSpacing: '0.06em',
                 }}
-                onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--color-accent)')}
-                onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--color-border)')}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(0,212,255,0.5)';
+                  e.currentTarget.style.background = 'rgba(0,212,255,0.08)';
+                  e.currentTarget.style.boxShadow = '0 0 16px -4px rgba(0,212,255,0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.borderColor = 'rgba(0,212,255,0.18)';
+                  e.currentTarget.style.background = 'rgba(0,212,255,0.04)';
+                  e.currentTarget.style.boxShadow = 'none';
+                }}
               >
-                <MessageSquare size={14} style={{ color: 'var(--color-accent)' }} />
-                Set Up Messaging Channels
+                <MessageSquare size={13} style={{ color: 'var(--color-accent)' }} />
+                CHANNELS
               </button>
             </div>
           </div>
         ) : (
-          <div className="max-w-[var(--chat-max-width)] mx-auto px-4 py-6">
-            {messages.map((msg) => (
-              <MessageBubble key={msg.id} message={msg} />
-            ))}
-            {streamState.isStreaming && streamState.content === '' && (
-              <div className="flex justify-start mb-4">
-                <StreamingDots phase={streamState.phase} />
-              </div>
-            )}
+          /* ── Chat view: reactor lives as a faint centered background ── */
+          <div className="relative">
+            {/* Background reactor — always centered, fades behind messages */}
+            <div
+              style={{
+                position: 'fixed',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                opacity: streamState.isStreaming || ttsSpeaking ? 0.22 : 0.07,
+                pointerEvents: 'none',
+                zIndex: 0,
+                transition: 'opacity 1s ease',
+              }}
+            >
+              <ArcReactor size={340} streaming={streamState.isStreaming || ttsSpeaking} audioData={ttsAudioData} />
+            </div>
+
+            <div className="relative z-10 max-w-[var(--chat-max-width)] mx-auto px-4 py-6">
+              {messages.map((msg) => (
+                <MessageBubble key={msg.id} message={msg} />
+              ))}
+              {streamState.isStreaming && streamState.content === '' && (
+                <div className="flex justify-start mb-4">
+                  <StreamingDots phase={streamState.phase} />
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

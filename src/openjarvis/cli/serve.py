@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 import click
@@ -68,6 +69,16 @@ def serve(
     bind_host = host or config.server.host
     bind_port = port or config.server.port
 
+    # Load cloud API keys from ~/.openjarvis/cloud-keys.env before engine init
+    _keys_path = os.path.expanduser("~/.openjarvis/cloud-keys.env")
+    if os.path.exists(_keys_path):
+        with open(_keys_path) as _kf:
+            for _raw in _kf:
+                _line = _raw.strip()
+                if _line and not _line.startswith("#") and "=" in _line:
+                    _k, _v = _line.split("=", 1)
+                    os.environ.setdefault(_k.strip(), _v.strip())
+
     # Set up engine
     register_builtin_models()
     bus = EventBus(record_history=False)
@@ -105,8 +116,6 @@ def serve(
 
     # If cloud API keys are set, wrap with MultiEngine so both local
     # and cloud models appear in the model list and can be used.
-    import os
-
     _has_cloud = (
         os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
@@ -319,6 +328,28 @@ def serve(
     except Exception as exc:
         logger.debug("Speech backend discovery failed: %s", exc)
 
+    # Set up TTS backend — prefer EdgeTTS (British neural voice), fall back to Kokoro
+    tts_backend = None
+    try:
+        from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+        _edge = EdgeTTSBackend()
+        if _edge.health():
+            tts_backend = _edge
+            console.print("  TTS:    [cyan]edge-tts / en-GB-RyanNeural (JARVIS voice)[/cyan]")
+    except Exception as exc:
+        logger.debug("EdgeTTS unavailable: %s", exc)
+
+    if tts_backend is None:
+        try:
+            from openjarvis.speech.kokoro_tts import KokoroTTSBackend
+            import openjarvis.speech  # noqa: F401
+
+            tts_backend = KokoroTTSBackend()
+            console.print("  TTS:    [cyan]kokoro (lazy)[/cyan]")
+        except Exception as exc:
+            logger.debug("Kokoro TTS unavailable: %s", exc)
+
     # Create app
     from openjarvis.server.app import create_app
 
@@ -398,9 +429,7 @@ def serve(
             logger.debug("Memory backend init failed: %s", exc)
 
     # --- Channel Gateway: API key, sessions, ChannelBridge ---
-    import os as _os
-
-    api_key = _os.environ.get("OPENJARVIS_API_KEY", "")
+    api_key = os.environ.get("OPENJARVIS_API_KEY", "")
     if not api_key:
         try:
             import tomllib
@@ -432,10 +461,10 @@ def serve(
         logger.info("Credentials loaded — %s", ", ".join(_cred_parts))
 
     webhook_config = {
-        "twilio_auth_token": _os.environ.get("TWILIO_AUTH_TOKEN", ""),
-        "bluebubbles_password": _os.environ.get("BLUEBUBBLES_PASSWORD", ""),
-        "whatsapp_verify_token": _os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
-        "whatsapp_app_secret": _os.environ.get("WHATSAPP_APP_SECRET", ""),
+        "twilio_auth_token": os.environ.get("TWILIO_AUTH_TOKEN", ""),
+        "bluebubbles_password": os.environ.get("BLUEBUBBLES_PASSWORD", ""),
+        "whatsapp_verify_token": os.environ.get("WHATSAPP_VERIFY_TOKEN", ""),
+        "whatsapp_app_secret": os.environ.get("WHATSAPP_APP_SECRET", ""),
     }
 
     # Wrap existing channel in ChannelBridge orchestrator
@@ -471,6 +500,7 @@ def serve(
         config=config,
         memory_backend=memory_backend,
         speech_backend=speech_backend,
+        tts_backend=tts_backend,
         agent_manager=agent_manager,
         agent_scheduler=agent_scheduler,
         api_key=api_key,

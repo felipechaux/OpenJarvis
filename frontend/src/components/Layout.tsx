@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { Outlet, useNavigate } from 'react-router';
 import { Sidebar } from './Sidebar/Sidebar';
 import { SystemPulse } from './SystemPulse';
+import { TitleBar } from './TitleBar';
 import { useAppStore } from '../lib/store';
-import { checkHealth } from '../lib/api';
+import { checkHealth, isTauri } from '../lib/api';
 
 export function Layout() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
@@ -24,8 +25,12 @@ export function Layout() {
   const navigate = useNavigate();
 
   return (
-    <div className="flex flex-col h-full w-full overflow-hidden relative" style={{ paddingTop: '3px' }}>
+    <div
+      className="flex flex-col h-full w-full overflow-hidden relative"
+      style={{ borderRadius: isTauri() ? 10 : 0, overflow: 'hidden' }}
+    >
       <div className="hud-backdrop" aria-hidden="true" />
+      <TitleBar />
       <SystemPulse apiReachable={apiReachable} />
 
       {/* Health check banner */}

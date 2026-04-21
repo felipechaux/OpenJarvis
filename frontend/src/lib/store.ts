@@ -12,6 +12,7 @@ import type {
   TokenUsage,
 } from '../types';
 import type { ManagedAgent } from './api';
+import type { AudioAnalyzerData } from '../hooks/useTTS';
 
 export interface CachedConnector {
   connector_id: string;
@@ -73,6 +74,7 @@ interface Settings {
   temperature: number;
   maxTokens: number;
   speechEnabled: boolean;
+  ttsEnabled: boolean;
 }
 
 function loadSettings(): Settings {
@@ -84,7 +86,8 @@ function loadSettings(): Settings {
     defaultAgent: '',
     temperature: 0.7,
     maxTokens: 4096,
-    speechEnabled: false,
+    speechEnabled: true,
+    ttsEnabled: true,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -211,6 +214,16 @@ interface AppState {
   // Model loading
   modelLoading: boolean;
   setModelLoading: (loading: boolean) => void;
+
+  // TTS / Voice state
+  ttsSpeaking: boolean;
+  ttsAudioData: AudioAnalyzerData;
+  setTTSSpeaking: (speaking: boolean) => void;
+  setTTSAudioData: (data: AudioAnalyzerData) => void;
+
+  // Initial greeting
+  greeted: boolean;
+  setGreeted: (greeted: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -459,6 +472,21 @@ export const useAppStore = create<AppState>((set, get) => {
     // ── Model loading ───────────────────────────────────────────────
     modelLoading: false,
     setModelLoading: (loading) => set({ modelLoading: loading }),
+
+    // ── TTS / Voice ─────────────────────────────────────────────────
+    ttsSpeaking: false,
+    ttsAudioData: {
+      frequencyData: null,
+      averageLevel: 0,
+      bassLevel: 0,
+      trebleLevel: 0,
+    },
+    setTTSSpeaking: (speaking) => set({ ttsSpeaking: speaking }),
+    setTTSAudioData: (data) => set({ ttsAudioData: data }),
+
+    // ── Initial Greeting ─────────────────────────────────────────────
+    greeted: false,
+    setGreeted: (greeted: boolean) => set({ greeted }),
 
     // ── Opt-in sharing ──────────────────────────────────────────────
 

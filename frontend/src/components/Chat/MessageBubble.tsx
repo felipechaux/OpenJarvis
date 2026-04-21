@@ -102,7 +102,10 @@ export function MessageBubble({ message }: Props) {
 
   if (isUser) {
     return (
-      <div className="flex justify-end mb-4">
+      <div
+        className="flex justify-end mb-4"
+        style={{ animation: 'jarvis-msg-in 0.25s ease-out both' }}
+      >
         <div
           className="max-w-[85%] px-4 py-2.5 text-sm leading-relaxed"
           style={{
@@ -111,6 +114,7 @@ export function MessageBubble({ message }: Props) {
             borderRadius: 'var(--radius-xl) var(--radius-xl) var(--radius-sm) var(--radius-xl)',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
+            border: '1px solid rgba(0,212,255,0.12)',
           }}
         >
           {message.content}
@@ -122,7 +126,27 @@ export function MessageBubble({ message }: Props) {
   const cleanContent = useMemo(() => stripThinkTags(message.content), [message.content]);
 
   return (
-    <div className="group mb-6">
+    <div
+      className="group mb-6"
+      style={{ animation: 'jarvis-msg-in 0.3s ease-out both' }}
+    >
+      {/* JARVIS avatar indicator */}
+      <div className="flex items-center gap-2 mb-2">
+        <div className="relative flex items-center justify-center" style={{ width: 18, height: 18 }}>
+          <svg width="18" height="18" viewBox="0 0 18 18" style={{ position: 'absolute', animation: 'jarvis-ring-cw 6s linear infinite', opacity: 0.5 }}>
+            <circle cx="9" cy="9" r="7" fill="none" stroke="var(--color-accent)" strokeWidth="0.75" strokeDasharray="4 2" />
+          </svg>
+          <div style={{
+            width: 5, height: 5, borderRadius: '50%',
+            background: 'var(--color-accent)',
+            boxShadow: '0 0 6px var(--color-accent)',
+          }} />
+        </div>
+        <span style={{ fontSize: '0.65rem', fontFamily: 'var(--font-hud)', letterSpacing: '0.15em', color: 'var(--color-accent)', opacity: 0.6 }}>
+          J.A.R.V.I.S
+        </span>
+      </div>
+
       {/* Tool calls */}
       {message.toolCalls && message.toolCalls.length > 0 && (
         <div className="mb-3 flex flex-col gap-2">
@@ -137,7 +161,13 @@ export function MessageBubble({ message }: Props) {
 
       {/* Assistant message */}
       {cleanContent && (
-        <div className="prose max-w-none">
+        <div
+          className="prose max-w-none"
+          style={{
+            borderLeft: '2px solid rgba(0,212,255,0.2)',
+            paddingLeft: '14px',
+          }}
+        >
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
             rehypePlugins={[[rehypeHighlight, { detect: true }], rehypeKatex]}

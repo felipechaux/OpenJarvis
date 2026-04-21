@@ -68,9 +68,13 @@ def discover_engines(config: JarvisConfig) -> List[Tuple[str, InferenceEngine]]:
             continue
 
     default_key = config.engine.default
+    _CLOUD_KEYS = {"cloud", "litellm"}
 
-    def sort_key(item: Tuple[str, Any]) -> Tuple[int, str]:
-        return (0 if item[0] == default_key else 1, item[0])
+    def sort_key(item: Tuple[str, Any]) -> Tuple[int, int, str]:
+        key = item[0]
+        is_default = 0 if key == default_key else 1
+        is_cloud = 1 if key in _CLOUD_KEYS else 0
+        return (is_default, is_cloud, key)
 
     healthy.sort(key=sort_key)
     return healthy

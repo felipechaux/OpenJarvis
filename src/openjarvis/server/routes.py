@@ -26,6 +26,59 @@ from openjarvis.server.models import (
 
 router = APIRouter()
 
+# ---------------------------------------------------------------------------
+# System prompt assembly — loads persona + user profile from disk
+# ---------------------------------------------------------------------------
+
+def _build_system_prompt(config=None) -> str:
+    """Assemble a system prompt from the JARVIS persona and user profile.
+
+    Reads ~/.openjarvis/USER.md (user profile) and the bundled persona
+    file. Results are dynamic and re-read on every request to ensure
+    changes are reflected immediately.
+    """
+    from pathlib import Path
+
+    sections: list[str] = []
+
+    # 1. Persona / soul — try user-level SOUL.md first, then bundled persona
+    soul_path = Path.home() / ".openjarvis" / "SOUL.md"
+    if soul_path.exists():
+        sections.append(soul_path.read_text().strip())
+    else:
+        # Fall back to bundled JARVIS persona
+        bundled = Path(__file__).resolve().parent.parent.parent.parent / (
+            "configs/openjarvis/prompts/personas/jarvis.md"
+        )
+        if bundled.exists():
+            sections.append(bundled.read_text().strip())
+
+    # 2. User profile
+    user_path = Path.home() / ".openjarvis" / "USER.md"
+    if config is not None:
+        custom = getattr(
+            getattr(config, "memory_files", None), "user_path", ""
+        )
+        if custom:
+            candidate = Path(custom).expanduser()
+            if candidate.exists():
+                user_path = candidate
+    if user_path.exists():
+        user_content = user_path.read_text().strip()
+        if user_content:
+            sections.append(
+                "## User Profile\n\n" + user_content
+            )
+
+    # 3. Agent memory (optional)
+    memory_path = Path.home() / ".openjarvis" / "MEMORY.md"
+    if memory_path.exists():
+        mem = memory_path.read_text().strip()
+        if mem:
+            sections.append("## Agent Memory\n\n" + mem)
+
+    return "\n\n".join(sections)
+
 
 def _to_messages(chat_messages) -> list[Message]:
     """Convert Pydantic ChatMessage objects to core Message objects."""
@@ -50,8 +103,21 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
 
-    # Inject memory context into messages before dispatching
+    # ── Inject system prompt (persona + user profile) ──────────────
+    # Only add when no system message is present — callers that already
+    # provide their own system prompt are not overridden.
     config = getattr(request.app.state, "config", None)
+    has_system = any(m.role == "system" for m in request_body.messages)
+    if not has_system:
+        system_text = _build_system_prompt(config)
+        if system_text:
+            from openjarvis.server.models import ChatMessage as _CM
+
+            request_body.messages.insert(
+                0, _CM(role="system", content=system_text)
+            )
+
+    # Inject memory context into messages before dispatching
     memory_backend = getattr(request.app.state, "memory_backend", None)
     if (
         config is not None
@@ -443,24 +509,47 @@ async def _handle_stream(
 
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelListResponse:
-    """List locally installed models (Ollama).
+    """List available models: local (Ollama) + cloud models for any set API keys."""
+    from openjarvis.server.cloud_router import _load_keys, is_cloud_model, list_local_models
 
-    Cloud models are not included here — they live in the Cloud Models tab
-    of the UI and are selected there, not from this endpoint.
-    """
-    from openjarvis.server.cloud_router import is_cloud_model, list_local_models
-
-    # Prefer engine.list_models() so mock engines work in tests.
-    # Filter out any cloud model IDs that may appear via MultiEngine.
-    # Fall back to direct Ollama query only when the engine returns nothing.
     engine = request.app.state.engine
     all_ids = engine.list_models()
-    model_ids = [m for m in all_ids if not is_cloud_model(m)]
-    if not model_ids:
-        model_ids = await list_local_models()
+    local_ids = [m for m in all_ids if not is_cloud_model(m)]
+    if not local_ids:
+        local_ids = await list_local_models()
 
+    # Add cloud models for each provider whose key is set
+    keys = _load_keys()
+    cloud_ids: list[str] = []
+
+    if keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY"):
+        cloud_ids.extend([
+            "gemini-2.5-flash", "gemini-2.5-pro",
+            "gemini-3-flash", "gemini-3-pro",
+        ])
+
+    if keys.get("OPENAI_API_KEY"):
+        cloud_ids.extend(["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o4-mini", "o3-mini"])
+
+    if keys.get("ANTHROPIC_API_KEY"):
+        cloud_ids.extend(["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"])
+
+    if keys.get("OPENROUTER_API_KEY"):
+        cloud_ids.extend([
+            "openrouter/auto",
+            "openrouter/google/gemini-2.5-pro",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/anthropic/claude-sonnet-4-6",
+            "openrouter/meta-llama/llama-4-maverick",
+            "openrouter/deepseek/deepseek-r1",
+        ])
+
+    # Put openrouter/auto first so the UI selects it by default
+    priority = [m for m in cloud_ids if m == "openrouter/auto"]
+    rest_cloud = [m for m in cloud_ids if m != "openrouter/auto"]
+    all_model_ids = priority + rest_cloud + local_ids
     return ModelListResponse(
-        data=[ModelObject(id=mid) for mid in model_ids],
+        data=[ModelObject(id=mid) for mid in all_model_ids],
     )
 
 
@@ -534,6 +623,67 @@ async def delete_model(model_name: str, request: Request):
         client.close()
 
     return {"status": "deleted", "model": model_name}
+
+
+@router.post("/v1/cloud/keys")
+async def save_cloud_key(request: Request):
+    """Save a cloud API key to ~/.openjarvis/cloud-keys.env and hot-reload."""
+    import os
+    from pathlib import Path
+
+    body = await request.json()
+    env_name: str = body.get("env_name", "").strip()
+    key_value: str = body.get("key_value", "").strip()
+
+    _ALLOWED = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MINIMAX_API_KEY",
+    }
+    if env_name not in _ALLOWED:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Unknown key name: {env_name!r}")
+
+    keys_path = Path.home() / ".openjarvis" / "cloud-keys.env"
+    keys_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parse existing entries
+    existing: dict[str, str] = {}
+    if keys_path.exists():
+        for raw in keys_path.read_text().splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+
+    if key_value:
+        existing[env_name] = key_value
+        os.environ[env_name] = key_value
+    else:
+        existing.pop(env_name, None)
+        os.environ.pop(env_name, None)
+
+    keys_path.write_text(
+        "\n".join(f"{k}={v}" for k, v in existing.items()) + ("\n" if existing else "")
+    )
+    return {"status": "ok", "env_name": env_name, "set": bool(key_value)}
+
+
+@router.get("/v1/cloud/keys/status")
+async def cloud_keys_status():
+    """Return which cloud API keys are currently set (values redacted)."""
+    from openjarvis.server.cloud_router import _load_keys
+    keys = _load_keys()
+    return {
+        "OPENAI_API_KEY": bool(keys.get("OPENAI_API_KEY")),
+        "ANTHROPIC_API_KEY": bool(keys.get("ANTHROPIC_API_KEY")),
+        "GEMINI_API_KEY": bool(keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY")),
+        "OPENROUTER_API_KEY": bool(keys.get("OPENROUTER_API_KEY")),
+        "MINIMAX_API_KEY": bool(keys.get("MINIMAX_API_KEY")),
+    }
 
 
 @router.post("/v1/cloud/reload")

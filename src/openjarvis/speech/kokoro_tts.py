@@ -70,11 +70,11 @@ class KokoroTTSBackend(TTSBackend):
         )
 
     def available_voices(self) -> List[str]:
-        return ["af_heart", "af_bella", "am_adam", "am_michael"]
+        return ["bm_george", "bm_lewis", "bf_emma", "bf_isabella", "am_adam", "am_michael", "af_heart"]
 
     def health(self) -> bool:
         try:
-            self._ensure_pipeline()
+            import kokoro  # noqa: F401
             return True
-        except RuntimeError:
+        except ImportError:
             return False
