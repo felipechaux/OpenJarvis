@@ -17,6 +17,7 @@ from openjarvis.connectors.oauth import (
     GOOGLE_ALL_SCOPES,
     build_google_auth_url,
     delete_tokens,
+    get_valid_google_token,
     load_tokens,
     resolve_google_credentials,
     run_oauth_flow,
@@ -67,6 +68,7 @@ def _gcal_api_events_list(
     *,
     page_token: Optional[str] = None,
     time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call the Calendar ``events.list`` endpoint for a single calendar.
 
@@ -81,6 +83,8 @@ def _gcal_api_events_list(
     time_min:
         Lower bound (exclusive) for an event's end time (RFC3339 timestamp).
         When omitted the API returns all events.
+    time_max:
+        Upper bound (exclusive) for an event's start time (RFC3339 timestamp).
 
     Returns
     -------
@@ -97,6 +101,8 @@ def _gcal_api_events_list(
         params["pageToken"] = page_token
     if time_min:
         params["timeMin"] = time_min
+    if time_max:
+        params["timeMax"] = time_max
 
     resp = httpx.get(
         f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
@@ -220,11 +226,7 @@ class GCalendarConnector(BaseConnector):
 
     def is_connected(self) -> bool:
         """Return ``True`` if a credentials file with a valid access token exists."""
-        tokens = load_tokens(self._credentials_path)
-        if tokens is None:
-            return False
-        # Must have an actual access_token, not just a client_id
-        return bool(tokens.get("access_token") or tokens.get("token"))
+        return bool(get_valid_google_token(self._credentials_path))
 
     def disconnect(self) -> None:
         """Delete the stored credentials file."""
@@ -293,11 +295,7 @@ class GCalendarConnector(BaseConnector):
         cursor:
             ``nextPageToken`` from a previous sync to resume pagination.
         """
-        tokens = load_tokens(self._credentials_path)
-        if not tokens:
-            return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
+        token = get_valid_google_token(self._credentials_path)
         if not token:
             return
 
@@ -310,6 +308,8 @@ class GCalendarConnector(BaseConnector):
             since = datetime.now() - timedelta(days=1)
         time_min = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # Limit to the next 7 days from now to avoid overwhelming context
+        time_max = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%dT23:59:59Z")
         synced = 0
 
         for calendar in calendars:
@@ -326,6 +326,7 @@ class GCalendarConnector(BaseConnector):
                         calendar_id,
                         page_token=page_token,
                         time_min=time_min,
+                        time_max=time_max,
                     )
                 except httpx.HTTPStatusError:
                     break

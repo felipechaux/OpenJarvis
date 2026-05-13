@@ -9,8 +9,48 @@ use tokio::sync::Mutex;
 const OLLAMA_PORT: u16 = 11434;
 const JARVIS_PORT: u16 = 8000;
 
-/// Default model — OpenRouter auto selects the best model per task.
+/// Fallback model when the user config has no model set.
 const DEFAULT_MODEL: &str = "openrouter/auto";
+
+/// Read `default_model` from ~/.openjarvis/config.toml, falling back to DEFAULT_MODEL.
+fn model_from_config() -> String {
+    let home = home_dir();
+    let config_path = format!("{home}/.openjarvis/config.toml");
+    if let Ok(text) = std::fs::read_to_string(&config_path) {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("default_model") {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    let model = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                    if !model.is_empty() {
+                        return model;
+                    }
+                }
+            }
+        }
+    }
+    DEFAULT_MODEL.to_string()
+}
+
+/// Read `default_agent` from ~/.openjarvis/config.toml, falling back to "native_react".
+fn agent_from_config() -> String {
+    let home = home_dir();
+    let config_path = format!("{home}/.openjarvis/config.toml");
+    if let Ok(text) = std::fs::read_to_string(&config_path) {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("default_agent") {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    let agent = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                    if !agent.is_empty() {
+                        return agent;
+                    }
+                }
+            }
+        }
+    }
+    "native_react".to_string()
+}
 
 /// Get the user home directory, handling both Unix (HOME) and Windows (USERPROFILE).
 fn home_dir() -> String {
@@ -525,6 +565,9 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = format!("Starting server with {} from {}...", DEFAULT_MODEL, root.display());
     }
 
+    let resolved_model = model_from_config();
+    let resolved_agent = agent_from_config();
+
     let mut cmd = tokio::process::Command::new(&uv_bin);
     cmd.args([
         "run",
@@ -535,9 +578,9 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         "--port",
         &JARVIS_PORT.to_string(),
         "--model",
-        DEFAULT_MODEL,
+        &resolved_model,
         "--agent",
-        "simple",
+        &resolved_agent,
     ])
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::piped())
@@ -1483,6 +1526,7 @@ pub fn run() {
                                 let _ = window.hide();
                             } else {
                                 let _ = window.show();
+                                let _ = window.unminimize();
                                 let _ = window.set_focus();
                             }
                         }
@@ -1492,7 +1536,19 @@ pub fn run() {
                     }
                     _ => {}
                 })
+                .on_tray_icon_event(|tray, event| {
+                    // Double-click the tray icon to show the window
+                    if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.unminimize();
+                            let _ = window.set_focus();
+                        }
+                    }
+                })
                 .build(app)?;
+
 
             // Create native macOS overlay panel
             #[cfg(target_os = "macos")]
@@ -1554,12 +1610,27 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenJarvis Desktop")
-        .run(move |_app, event| {
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                let b = backend.clone();
-                tauri::async_runtime::spawn(async move {
-                    b.lock().await.stop_all().await;
-                });
+        .run(move |app, event| {
+            match event {
+                // Hide the window instead of quitting when the user clicks the red X,
+                // so the wake word listener keeps running in the background.
+                tauri::RunEvent::WindowEvent {
+                    label,
+                    event: tauri::WindowEvent::CloseRequested { api, .. },
+                    ..
+                } if label == "main" => {
+                    api.prevent_close();
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.hide();
+                    }
+                }
+                tauri::RunEvent::ExitRequested { .. } => {
+                    let b = backend.clone();
+                    tauri::async_runtime::spawn(async move {
+                        b.lock().await.stop_all().await;
+                    });
+                }
+                _ => {}
             }
         });
 }

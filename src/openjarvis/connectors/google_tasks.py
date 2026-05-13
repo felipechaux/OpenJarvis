@@ -12,7 +12,11 @@ from typing import Any, Dict, Iterator, Optional
 import httpx
 
 from openjarvis.connectors._stubs import BaseConnector, Document, SyncStatus
-from openjarvis.connectors.oauth import load_tokens, resolve_google_credentials
+from openjarvis.connectors.oauth import (
+    get_valid_google_token,
+    load_tokens,
+    resolve_google_credentials,
+)
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 from openjarvis.core.registry import ConnectorRegistry
 
@@ -49,8 +53,7 @@ class GoogleTasksConnector(BaseConnector):
         self._status = SyncStatus()
 
     def _get_access_token(self) -> str:
-        tokens = load_tokens(str(self._credentials_path))
-        return tokens.get("access_token") or tokens.get("token", "")
+        return get_valid_google_token(str(self._credentials_path)) or ""
 
     def is_connected(self) -> bool:
         return self._credentials_path.exists()

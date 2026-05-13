@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import base64
 import email.utils
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, List, Optional
 
 import httpx
@@ -19,8 +19,10 @@ from openjarvis.connectors.oauth import (
     GOOGLE_ALL_SCOPES,
     build_google_auth_url,
     delete_tokens,
+    get_valid_google_token,
     load_tokens,
     resolve_google_credentials,
+    run_oauth_flow,
     save_tokens,
 )
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
@@ -199,13 +201,8 @@ class GmailConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
-        """Return ``True`` if a credentials file with a valid token exists."""
-        tokens = load_tokens(self._credentials_path)
-        if tokens is None:
-            return False
-        # Accept any non-empty dict that contains at least one key
-        # (simplified: real impl would also check expiry / refresh token)
-        return bool(tokens)
+        """True if Gmail credentials exist and have a valid token."""
+        return bool(get_valid_google_token(self._credentials_path))
 
     def disconnect(self) -> None:
         """Delete the stored credentials file."""
@@ -245,19 +242,16 @@ class GmailConnector(BaseConnector):
         cursor:
             ``nextPageToken`` from a previous sync to resume pagination.
         """
-        tokens = load_tokens(self._credentials_path)
-        if not tokens:
-            return
-
-        token: str = tokens.get("token", tokens.get("access_token", ""))
+        token = get_valid_google_token(self._credentials_path)
         if not token:
             return
 
-        query = "category:primary"
-        if since is not None:
-            # Gmail's after: operator accepts Unix epoch seconds.
-            epoch = int(since.timestamp())
-            query = f"category:primary after:{epoch}"
+        query = "is:unread"
+        if since is None:
+            since = datetime.now() - timedelta(days=1)
+        
+        epoch = int(since.timestamp())
+        query = f"is:unread after:{epoch}"
 
         page_token: Optional[str] = cursor
         synced = 0

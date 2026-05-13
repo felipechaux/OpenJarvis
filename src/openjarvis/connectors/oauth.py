@@ -318,6 +318,78 @@ def exchange_google_token(
     return resp.json()
 
 
+def refresh_google_token(
+    refresh_token: str,
+    client_id: str,
+    client_secret: str,
+) -> Dict[str, Any]:
+    """Exchange a refresh token for a new access token."""
+    import httpx
+
+    resp = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "refresh_token",
+        },
+        timeout=30.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_valid_google_token(credentials_path: str) -> Optional[str]:
+    """Load tokens, check expiration, and refresh if needed. Returns access_token."""
+    import time
+    tokens = load_tokens(credentials_path)
+    if not tokens:
+        return None
+        
+    access_token = tokens.get("access_token", tokens.get("token", ""))
+    refresh_token = tokens.get("refresh_token")
+    client_id = tokens.get("client_id")
+    client_secret = tokens.get("client_secret")
+    expires_at = tokens.get("expires_at", 0)
+    
+    # If no expiration is known, assume it might be valid but it probably isn't if it's old.
+    # To be safe and fix the existing users, we'll try to refresh if expires_at is 0.
+    
+    # Give a 5-minute buffer
+    if expires_at and time.time() < (expires_at - 300):
+        return access_token
+        
+    if not refresh_token or not client_id or not client_secret:
+        # Cannot refresh, just return what we have and hope
+        return access_token
+        
+    try:
+        new_tokens = refresh_google_token(refresh_token, client_id, client_secret)
+        new_access_token = new_tokens.get("access_token", access_token)
+        new_expires_in = new_tokens.get("expires_in", 3600)
+        new_expires_at = int(time.time()) + new_expires_in
+        
+        # Keep old values for things not returned in refresh (like refresh_token)
+        updated_tokens = {**tokens, **new_tokens, "expires_at": new_expires_at}
+        save_tokens(credentials_path, updated_tokens)
+        
+        # Also update shared if it's not the shared one
+        if credentials_path != _SHARED_GOOGLE_CREDENTIALS_PATH:
+            try:
+                # Keep existing fields from shared
+                shared = load_tokens(_SHARED_GOOGLE_CREDENTIALS_PATH) or {}
+                shared.update(updated_tokens)
+                save_tokens(_SHARED_GOOGLE_CREDENTIALS_PATH, shared)
+            except Exception:
+                pass
+            
+        return new_access_token
+    except Exception as e:
+        print(f"Failed to refresh token: {e}")
+        return access_token
+
+
 def run_oauth_flow(
     client_id: str,
     client_secret: str,
@@ -454,12 +526,16 @@ def run_oauth_flow(
         redirect_uri=redirect_uri,
     )
 
+    import time
+    expires_at = int(time.time()) + tokens.get("expires_in", 3600)
+    
     # Persist tokens together with client credentials (needed for refresh)
     token_payload = {
         "access_token": tokens.get("access_token", ""),
         "refresh_token": tokens.get("refresh_token", ""),
         "token_type": tokens.get("token_type", "Bearer"),
         "expires_in": tokens.get("expires_in", 3600),
+        "expires_at": expires_at,
         "client_id": client_id,
         "client_secret": client_secret,
     }
@@ -645,12 +721,16 @@ def run_connector_oauth(
     # Exchange code for tokens
     tokens = _exchange_token(provider, code, client_id, client_secret, redirect_uri)
 
+    import time
+    expires_at = int(time.time()) + tokens.get("expires_in", 3600)
+    
     # Build payload with client credentials included (needed for refresh)
     payload = {
         "access_token": tokens.get("access_token", ""),
         "refresh_token": tokens.get("refresh_token", ""),
         "token_type": tokens.get("token_type", "Bearer"),
         "expires_in": tokens.get("expires_in", 3600),
+        "expires_at": expires_at,
         "client_id": client_id,
         "client_secret": client_secret,
     }

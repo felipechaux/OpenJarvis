@@ -6,6 +6,7 @@ import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useTTS } from '../../hooks/useTTS';
+import { WAKE_EVENT } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 export function InputArea() {
@@ -66,6 +67,17 @@ export function InputArea() {
     : !speechAvailable ? 'no-backend'
     : streamState.isStreaming ? 'streaming'
     : undefined;
+
+  // Start mic automatically when wake word is detected
+  useEffect(() => {
+    const onWake = () => {
+      if (!micDisabled && speechState === 'idle') {
+        startRecording();
+      }
+    };
+    window.addEventListener(WAKE_EVENT, onWake);
+    return () => window.removeEventListener(WAKE_EVENT, onWake);
+  }, [micDisabled, speechState, startRecording]);
 
   // Track if we should auto-send after transcription
   const autoSendAfterTranscriptionRef = useRef(false);

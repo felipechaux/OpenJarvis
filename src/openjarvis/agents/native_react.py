@@ -143,10 +143,30 @@ class NativeReActAgent(ToolUsingAgent):
             )
         else:
             skill_examples_block = ""
-        system_prompt = REACT_SYSTEM_PROMPT.format(
+
+        # Load configuration for prompt building
+        try:
+            from openjarvis.core.config import load_config
+            cfg = load_config()
+            persona_template = cfg.agent.system_prompt or cfg.agent.default_system_prompt
+        except Exception:
+            persona_template = ""
+
+        # Use SystemPromptBuilder to assemble the full persona (SOUL, MEMORY, USER)
+        # and then append the ReAct-specific instructions.
+        from openjarvis.prompt.builder import SystemPromptBuilder
+        builder = SystemPromptBuilder(
+            agent_template=persona_template,
+            skill_few_shot_examples=self._skill_few_shot_examples,
+        )
+        
+        base_persona = builder.build()
+        react_instructions = REACT_SYSTEM_PROMPT.format(
             tool_descriptions=tool_desc,
             skill_examples=skill_examples_block,
         )
+        
+        system_prompt = base_persona + "\n\n---\n\n" + react_instructions
 
         messages = self._build_messages(input, context, system_prompt=system_prompt)
 

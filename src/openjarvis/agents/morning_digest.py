@@ -19,9 +19,23 @@ from openjarvis.core.types import Message, Role, ToolCall
 
 def _load_persona(persona_name: str) -> str:
     """Load a persona prompt file by name."""
+    # Absolute path to the bundled personas dir, regardless of CWD
+    _bundled_dir = (
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "configs"
+        / "openjarvis"
+        / "prompts"
+        / "personas"
+    )
     search_paths = [
-        Path("configs/openjarvis/prompts/personas") / f"{persona_name}.md",
+        # User SOUL.md is the canonical user-level persona override
+        Path.home() / ".openjarvis" / "SOUL.md",
+        # Named persona under user config dir
         Path.home() / ".openjarvis" / "prompts" / "personas" / f"{persona_name}.md",
+        # Bundled persona — absolute path so CWD doesn't matter
+        _bundled_dir / f"{persona_name}.md",
+        # Legacy relative path fallback
+        Path("configs/openjarvis/prompts/personas") / f"{persona_name}.md",
     ]
     for p in search_paths:
         if p.exists():
@@ -87,13 +101,21 @@ class MorningDigestAgent(ToolUsingAgent):
             "general). Skip if no data.\n\n"
             "6. CLOSING — One forward-looking sentence with the honorific.\n\n"
             "ABSOLUTE RULES (violations are unacceptable):\n"
-            "- ONLY facts from the data. Zero hallucination.\n"
-            "- NEVER mention disconnected or unavailable sources.\n"
-            "- NEVER state raw health numbers. Say 'your sleep was solid' "
-            "NOT 'heart rate 56 bpm' or 'HRV 53' or '6000 steps' or "
-            "'readiness 82'. Interpret, never enumerate.\n"
-            "- NEVER describe actions you are taking.\n"
-            "- Acknowledge every source that returned data, even briefly.\n"
+            "- ONLY facts explicitly present in the data above. "
+            "Zero hallucination, zero inference, zero invention.\n"
+            "- CRITICAL: Do NOT invent any email senders, subjects, or content. "
+            "If you cannot find the sender name in the data, do not mention the email. "
+            "If the data shows automated/promotional senders, either skip them or "
+            "describe them exactly as shown — never upgrade them to fictional humans.\n"
+            "- CRITICAL: Do NOT invent any calendar events. Report only events "
+            "whose exact title and time appear in the data.\n"
+            "- If a section has no data lines, SKIP IT ENTIRELY. "
+            "Do not mention it, do not acknowledge it, do not invent content.\n"
+            "- Report the ACTUAL email subjects, senders, and calendar event "
+            "titles you see in the data. Do not paraphrase or generalise them.\n"
+            "- NEVER state raw health numbers. Interpret trends in plain language.\n"
+            "- NEVER describe actions you are taking ('I will now...').\n"
+            "- NEVER mention sources that had no data.\n"
             "- No markdown, emojis, bullets, or headers.\n"
             "- STRICT LIMIT: 200 words. Be concise."
         )
@@ -103,15 +125,12 @@ class MorningDigestAgent(ToolUsingAgent):
         default_source_map = {
             "messages": [
                 "gmail",
-                "slack",
                 "google_tasks",
-                "imessage",
-                "github_notifications",
             ],
             "calendar": ["gcalendar"],
-            "health": ["oura", "apple_health"],
-            "world": ["weather", "hackernews", "news_rss"],
-            "music": ["spotify", "apple_music"],
+            "health": [],
+            "world": ["weather", "hackernews"],
+            "music": [],
         }
         sources = set()
         for section in self._sections:
@@ -146,9 +165,14 @@ class MorningDigestAgent(ToolUsingAgent):
             Message(
                 role=Role.USER,
                 content=(
-                    f"Here is the collected data from my sources:\n\n"
-                    f"{collected_data}\n\n"
-                    f"Synthesize my morning briefing. Remember:\n"
+                    f"=== VERIFIED DATA — ONLY SOURCE OF TRUTH ===\n"
+                    f"{collected_data}\n"
+                    f"=== END OF VERIFIED DATA ===\n\n"
+                    f"Synthesize my morning briefing using ONLY the data above. Remember:\n"
+                    f"- Every email sender, subject, and calendar event you mention MUST "
+                    f"appear word-for-word in the VERIFIED DATA above\n"
+                    f"- If you cannot find a human sender (real person, not automated), "
+                    f"do not invent one — skip that email or describe it as automated\n"
                     f"- Priority-first, connect related items\n"
                     f"- For health: say 'solid', 'improving', 'dipped' "
                     f"— NEVER say any number (no 82, no 56, no 6000)\n"

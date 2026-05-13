@@ -52,7 +52,19 @@ export function ChatPage() {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
       });
-      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: Current local time in Bogotá is ${localTime}. The user has just arrived. Please perform these steps: 1) Use 'get_weather' for Bogotá. 2) Use 'digest_collect' with sources ['gcalendar', 'gmail', 'oura'] to check for today's events and status. 3) Greet the user by their name (Felipe) with a time-appropriate salutation (good morning / good afternoon / good evening based on the time above) and provide a concise, proactive briefing. Stay in your signature Paul Bettany-esque character.`;
+      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: You MUST call 'get_weather' and 'digest_collect' (sources: ['gcalendar', 'gmail']) immediately. 
+Format: Report EVERY email and calendar event found in the tool outputs. Greet the user as Mr. Chaux. 
+Local time: ${localTime}.
+
+INSIGHT COMMANDS:
+- List all unread emails from the tool output.
+- List all upcoming events for today and tomorrow.
+- Mention Bogotá weather impact on schedule.
+
+ABSOLUTE RULES:
+- YOU MUST report the specific emails found. NEVER say you are missing data if the tools return data.
+- ZERO HALLUCINATION. If a tool fails, say it failed.
+- Stay in character as JARVIS.`;
 
       const assistantMsgId = generateId();
       addMessage(convId, {
@@ -64,7 +76,7 @@ export function ChatPage() {
 
       setStreamState({
         isStreaming: true,
-        phase: 'Jarvis is waking up...',
+        phase: 'Initializing systems...',
         content: '',
       });
 
@@ -80,13 +92,13 @@ export function ChatPage() {
           if (event.event === 'tool_call_start') {
              try {
                 const data = JSON.parse(event.data);
-                if (data.tool === 'get_weather') setStreamState({ phase: 'Checking the weather...' });
-                if (data.tool === 'digest_collect') setStreamState({ phase: 'Syncing your calendar...' });
+                if (data.tool === 'get_weather') setStreamState({ phase: 'Checking meteorological data...' });
+                if (data.tool === 'digest_collect') setStreamState({ phase: 'Synchronizing your briefing...' });
              } catch {
                 setStreamState({ phase: 'Processing...' });
              }
           } else if (event.event === 'tool_call_end') {
-             setStreamState({ phase: 'Generating briefing...' });
+             setStreamState({ phase: 'Synthesizing briefing...' });
           } else {
             try {
               const data = JSON.parse(event.data);
