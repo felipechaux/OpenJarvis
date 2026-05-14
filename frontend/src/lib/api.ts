@@ -277,12 +277,16 @@ export async function fetchSpeechHealth(): Promise<SpeechHealth> {
     try {
       return await tauriInvoke<SpeechHealth>('speech_health');
     } catch {
-      return { available: false };
+      // Rust command not available — fall through to HTTP
     }
   }
-  const res = await fetch(`${getBase()}/v1/speech/health`);
-  if (!res.ok) return { available: false };
-  return res.json();
+  try {
+    const res = await fetch(`${getBase()}/v1/speech/health`);
+    if (!res.ok) return { available: false };
+    return res.json();
+  } catch {
+    return { available: false };
+  }
 }
 
 // ---------------------------------------------------------------------------

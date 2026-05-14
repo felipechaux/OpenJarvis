@@ -42,9 +42,9 @@ class KnowledgeSearchTool(BaseTool):
         return ToolSpec(
             name="knowledge_search",
             description=(
-                "Search ingested personal knowledge (emails, Slack messages,"
-                " documents) using full-text BM25 retrieval with optional"
-                " filters for source, type, author, and date range."
+                "Search your personal knowledge base (emails, Slack messages,"
+                " notes, documents, and contacts) to answer questions about"
+                " your life, profile, and history using full-text retrieval."
             ),
             parameters={
                 "type": "object",
@@ -95,11 +95,17 @@ class KnowledgeSearchTool(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         if self._store is None and self._retriever is None:
-            return ToolResult(
-                tool_name="knowledge_search",
-                content="No knowledge store configured.",
-                success=False,
-            )
+            # Lazy-bind to the default KnowledgeStore at ~/.openjarvis/knowledge.db
+            # so the tool works when instantiated with no args (e.g. via
+            # ToolRegistry from `jarvis serve`).
+            try:
+                self._store = KnowledgeStore()
+            except Exception as exc:
+                return ToolResult(
+                    tool_name="knowledge_search",
+                    content=f"Failed to open knowledge store: {exc}",
+                    success=False,
+                )
 
         query: str = params.get("query", "")
         if not query:

@@ -997,6 +997,54 @@ BUILTIN_MODELS: List[ModelSpec] = [
             "url": "https://ai.google.dev/gemini-api/docs/models",
         },
     ),
+    # -----------------------------------------------------------------------
+    # Cloud models — NVIDIA
+    # -----------------------------------------------------------------------
+    ModelSpec(
+        model_id="nvidia/nemotron-4-340b-instruct",
+        name="NVIDIA Nemotron 4 340B Instruct",
+        parameter_count_b=340.0,
+        context_length=4096,
+        supported_engines=("cloud",),
+        provider="nvidia",
+        requires_api_key=True,
+        metadata={
+            "architecture": "proprietary",
+            "pricing_input": 0.80,
+            "pricing_output": 2.40,
+            "url": "https://build.nvidia.com/nvidia/nemotron-4-340b-instruct",
+        },
+    ),
+    ModelSpec(
+        model_id="nvidia/nemotron-4-340b-base",
+        name="NVIDIA Nemotron 4 340B Base",
+        parameter_count_b=340.0,
+        context_length=4096,
+        supported_engines=("cloud",),
+        provider="nvidia",
+        requires_api_key=True,
+        metadata={
+            "architecture": "proprietary",
+            "pricing_input": 0.80,
+            "pricing_output": 2.40,
+            "url": "https://build.nvidia.com/nvidia/nemotron-4-340b-base",
+        },
+    ),
+    ModelSpec(
+        model_id="nvidia/nemotron-4-mini",
+        name="NVIDIA Nemotron 4 Mini",
+        parameter_count_b=4.0,
+        context_length=4096,
+        supported_engines=("cloud",),
+        provider="nvidia",
+        requires_api_key=True,
+        metadata={
+            "architecture": "proprietary",
+            "pricing_input": 0.06,
+            "pricing_output": 0.18,
+            "url": "https://build.nvidia.com/nvidia/nemotron-4-mini",
+        },
+    ),
 ]
 
 

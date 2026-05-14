@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -24,7 +26,62 @@ from openjarvis.server.models import (
     UsageInfo,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+# ---------------------------------------------------------------------------
+# System prompt assembly — loads persona + user profile from disk
+# ---------------------------------------------------------------------------
+
+def _build_system_prompt(config=None) -> str:
+    """Assemble a system prompt from the JARVIS persona and user profile.
+
+    Reads ~/.openjarvis/USER.md (user profile) and the bundled persona
+    file. Results are dynamic and re-read on every request to ensure
+    changes are reflected immediately.
+    """
+    from pathlib import Path
+
+    sections: list[str] = []
+
+    # 1. Persona / soul — try user-level SOUL.md first, then bundled persona
+    soul_path = Path.home() / ".openjarvis" / "SOUL.md"
+    if soul_path.exists():
+        sections.append(soul_path.read_text().strip())
+    else:
+        # Fall back to bundled JARVIS persona
+        bundled = Path(__file__).resolve().parent.parent.parent.parent / (
+            "configs/openjarvis/prompts/personas/jarvis.md"
+        )
+        if bundled.exists():
+            sections.append(bundled.read_text().strip())
+
+    # 2. User profile
+    user_path = Path.home() / ".openjarvis" / "USER.md"
+    if config is not None:
+        custom = getattr(
+            getattr(config, "memory_files", None), "user_path", ""
+        )
+        if custom:
+            candidate = Path(custom).expanduser()
+            if candidate.exists():
+                user_path = candidate
+    if user_path.exists():
+        user_content = user_path.read_text().strip()
+        if user_content:
+            sections.append(
+                "## User Profile\n\n" + user_content
+            )
+
+    # 3. Agent memory (optional)
+    memory_path = Path.home() / ".openjarvis" / "MEMORY.md"
+    if memory_path.exists():
+        mem = memory_path.read_text().strip()
+        if mem:
+            sections.append("## Agent Memory\n\n" + mem)
+
+    return "\n\n".join(sections)
 
 
 def _to_messages(chat_messages) -> list[Message]:
@@ -50,8 +107,21 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
 
-    # Inject memory context into messages before dispatching
+    # ── Inject system prompt (persona + user profile) ──────────────
+    # Only add when no system message is present — callers that already
+    # provide their own system prompt are not overridden.
     config = getattr(request.app.state, "config", None)
+    has_system = any(m.role == "system" for m in request_body.messages)
+    if not has_system:
+        system_text = _build_system_prompt(config)
+        if system_text:
+            from openjarvis.server.models import ChatMessage as _CM
+
+            request_body.messages.insert(
+                0, _CM(role="system", content=system_text)
+            )
+
+    # Inject memory context into messages before dispatching
     memory_backend = getattr(request.app.state, "memory_backend", None)
     if (
         config is not None
@@ -139,11 +209,20 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
 
     if request_body.stream:
         bus = getattr(request.app.state, "bus", None)
-        # Use the agent stream bridge only when tools are present (the
-        # bridge runs agent.run() synchronously and word-splits the result,
-        # so it can't stream tokens in real-time).  For plain chat, stream
-        # directly from the engine for true token-by-token output.
-        if agent is not None and bus is not None and request_body.tools:
+        # Route through the agent stream bridge whenever the server-side
+        # agent has its own tools (so e.g. knowledge_search runs even though
+        # the client doesn't pass tools in the request body). The bridge
+        # runs agent.run() synchronously and word-splits the result, which
+        # sacrifices true token-by-token streaming — accepted tradeoff to
+        # keep tool calls working in the desktop app.
+        agent_has_tools = agent is not None and bool(
+            getattr(agent, "_tools", None)
+        )
+        if (
+            agent is not None
+            and bus is not None
+            and (request_body.tools or agent_has_tools)
+        ):
             return await _handle_agent_stream(agent, bus, model, request_body)
         return await _handle_stream(engine, model, request_body, complexity_info)
 
@@ -441,26 +520,94 @@ async def _handle_stream(
     )
 
 
+_NVIDIA_MODELS_CACHE: dict[str, Any] = {"ids": [], "fetched_at": 0.0}
+_NVIDIA_MODELS_TTL = 600  # seconds
+
+
+async def _fetch_nvidia_models(api_key: str) -> list[str]:
+    """Fetch NVIDIA's available models from the OpenAI-compatible /models endpoint.
+
+    Cached in-process for _NVIDIA_MODELS_TTL seconds. Returns prefixed IDs
+    (``nvidia/<model>``) so they route correctly through cloud_router. Returns
+    an empty list on failure so the caller can fall back to a hardcoded list.
+    """
+    now = time.time()
+    if (
+        _NVIDIA_MODELS_CACHE["ids"]
+        and now - _NVIDIA_MODELS_CACHE["fetched_at"] < _NVIDIA_MODELS_TTL
+    ):
+        return list(_NVIDIA_MODELS_CACHE["ids"])
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://integrate.api.nvidia.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+            ids = sorted({f"nvidia/{m['id']}" for m in data if m.get("id")})
+            _NVIDIA_MODELS_CACHE["ids"] = ids
+            _NVIDIA_MODELS_CACHE["fetched_at"] = now
+            return list(ids)
+    except Exception as exc:
+        logger.warning("Failed to fetch NVIDIA model list: %s", exc)
+        return []
+
+
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelListResponse:
-    """List locally installed models (Ollama).
+    """List available models: local (Ollama) + cloud models for any set API keys."""
+    from openjarvis.server.cloud_router import _load_keys, is_cloud_model, list_local_models
 
-    Cloud models are not included here — they live in the Cloud Models tab
-    of the UI and are selected there, not from this endpoint.
-    """
-    from openjarvis.server.cloud_router import is_cloud_model, list_local_models
-
-    # Prefer engine.list_models() so mock engines work in tests.
-    # Filter out any cloud model IDs that may appear via MultiEngine.
-    # Fall back to direct Ollama query only when the engine returns nothing.
     engine = request.app.state.engine
     all_ids = engine.list_models()
-    model_ids = [m for m in all_ids if not is_cloud_model(m)]
-    if not model_ids:
-        model_ids = await list_local_models()
+    local_ids = [m for m in all_ids if not is_cloud_model(m)]
+    if not local_ids:
+        local_ids = await list_local_models()
 
+    # Add cloud models for each provider whose key is set
+    keys = _load_keys()
+    cloud_ids: list[str] = []
+
+    if keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY"):
+        cloud_ids.extend([
+            "gemini-2.5-flash", "gemini-2.5-pro",
+            "gemini-3-flash", "gemini-3-pro",
+        ])
+
+    if keys.get("OPENAI_API_KEY"):
+        cloud_ids.extend(["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o4-mini", "o3-mini"])
+
+    if keys.get("ANTHROPIC_API_KEY"):
+        cloud_ids.extend(["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"])
+
+    if keys.get("OPENROUTER_API_KEY"):
+        cloud_ids.extend([
+            "openrouter/auto",
+            "openrouter/google/gemini-2.5-pro",
+            "openrouter/google/gemini-2.5-flash",
+            "openrouter/anthropic/claude-sonnet-4-6",
+            "openrouter/meta-llama/llama-4-maverick",
+            "openrouter/deepseek/deepseek-r1",
+        ])
+
+    if keys.get("NVIDIA_API_KEY"):
+        nvidia_ids = await _fetch_nvidia_models(keys["NVIDIA_API_KEY"])
+        if not nvidia_ids:
+            nvidia_ids = [
+                "nvidia/nemotron-4-340b-instruct",
+                "nvidia/nemotron-4-340b-base",
+                "nvidia/nemotron-4-mini",
+            ]
+        cloud_ids.extend(nvidia_ids)
+
+    # Put the configured default model first so the UI selects it by default.
+    default_model = getattr(request.app.state, "model", "") or "claude-sonnet-4-6"
+    priority = [m for m in cloud_ids if m == default_model]
+    rest_cloud = [m for m in cloud_ids if m != default_model]
+    all_model_ids = priority + rest_cloud + local_ids
     return ModelListResponse(
-        data=[ModelObject(id=mid) for mid in model_ids],
+        data=[ModelObject(id=mid) for mid in all_model_ids],
     )
 
 
@@ -534,6 +681,67 @@ async def delete_model(model_name: str, request: Request):
         client.close()
 
     return {"status": "deleted", "model": model_name}
+
+
+@router.post("/v1/cloud/keys")
+async def save_cloud_key(request: Request):
+    """Save a cloud API key to ~/.openjarvis/cloud-keys.env and hot-reload."""
+    import os
+    from pathlib import Path
+
+    body = await request.json()
+    env_name: str = body.get("env_name", "").strip()
+    key_value: str = body.get("key_value", "").strip()
+
+    _ALLOWED = {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MINIMAX_API_KEY",
+    }
+    if env_name not in _ALLOWED:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail=f"Unknown key name: {env_name!r}")
+
+    keys_path = Path.home() / ".openjarvis" / "cloud-keys.env"
+    keys_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Parse existing entries
+    existing: dict[str, str] = {}
+    if keys_path.exists():
+        for raw in keys_path.read_text().splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+
+    if key_value:
+        existing[env_name] = key_value
+        os.environ[env_name] = key_value
+    else:
+        existing.pop(env_name, None)
+        os.environ.pop(env_name, None)
+
+    keys_path.write_text(
+        "\n".join(f"{k}={v}" for k, v in existing.items()) + ("\n" if existing else "")
+    )
+    return {"status": "ok", "env_name": env_name, "set": bool(key_value)}
+
+
+@router.get("/v1/cloud/keys/status")
+async def cloud_keys_status():
+    """Return which cloud API keys are currently set (values redacted)."""
+    from openjarvis.server.cloud_router import _load_keys
+    keys = _load_keys()
+    return {
+        "OPENAI_API_KEY": bool(keys.get("OPENAI_API_KEY")),
+        "ANTHROPIC_API_KEY": bool(keys.get("ANTHROPIC_API_KEY")),
+        "GEMINI_API_KEY": bool(keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY")),
+        "OPENROUTER_API_KEY": bool(keys.get("OPENROUTER_API_KEY")),
+        "MINIMAX_API_KEY": bool(keys.get("MINIMAX_API_KEY")),
+    }
 
 
 @router.post("/v1/cloud/reload")

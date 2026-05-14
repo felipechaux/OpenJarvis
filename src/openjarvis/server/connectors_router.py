@@ -164,9 +164,16 @@ def create_connectors_router():
         # connectors.
         auth_url: Optional[str] = None
         try:
-            auth_url = instance.auth_url()
+            # Calculate our own callback URL to pass to the connector
+            base_url = str(request.base_url).rstrip("/")
+            callback_url = f"{base_url}/v1/connectors/{connector_id}/oauth/callback"
+            auth_url = instance.auth_url(redirect_uri=callback_url)
         except (NotImplementedError, Exception):
-            pass
+            # Fallback for connectors that don't support the redirect_uri param yet
+            try:
+                auth_url = instance.auth_url()
+            except Exception:
+                pass
 
         # Serialise MCP tool names only (ToolSpec objects are not JSON-safe).
         mcp_tools = []
@@ -206,7 +213,9 @@ def create_connectors_router():
         }
 
     @router.post("/{connector_id}/connect")
-    async def connect_connector(connector_id: str, req: ConnectRequest):
+    async def connect_connector(
+        connector_id: str, req: ConnectRequest, request: Request
+    ):
         """Connect a connector using the supplied credentials."""
         _ensure_connectors_registered()
         if not ConnectorRegistry.contains(connector_id):
@@ -230,6 +239,24 @@ def create_connectors_router():
             elif auth_type == "oauth":
                 if req.code:
                     instance.handle_callback(req.code)
+                elif req.email and req.password:
+                    # Treat 'email' as client_id and 'password' as client_secret
+                    # for OAuth flows initiated from the UI.
+                    from openjarvis.connectors.oauth import (
+                        get_provider_for_connector,
+                        save_client_credentials,
+                    )
+
+                    provider = get_provider_for_connector(connector_id)
+                    if provider:
+                        save_client_credentials(
+                            provider, req.email, req.password
+                        )
+                    elif hasattr(instance, "_email") and hasattr(
+                        instance, "_password"
+                    ):
+                        instance._email = req.email
+                        instance._password = req.password
                 elif req.token:
                     # Some OAuth connectors accept a pre-existing token.
                     if hasattr(instance, "_token"):
@@ -277,10 +304,31 @@ def create_connectors_router():
 
             threading.Thread(target=_ingest, daemon=True).start()
 
+        # Calculate auth_url if needed for the response
+        auth_url = None
+        try:
+            base_url = str(request.base_url).rstrip("/")
+            callback_url = f"{base_url}/v1/connectors/{connector_id}/oauth/callback"
+            auth_url = instance.auth_url(redirect_uri=callback_url)
+        except Exception:
+            try:
+                auth_url = instance.auth_url()
+            except Exception:
+                pass
+
+        # For Desktop App reliability, open the browser directly from the backend
+        if auth_url and auth_type == "oauth":
+            try:
+                import webbrowser
+                webbrowser.open(auth_url)
+            except Exception:
+                pass
+
         return {
             "connector_id": connector_id,
             "connected": instance.is_connected(),
             "status": "connected" if instance.is_connected() else "pending",
+            "auth_url": auth_url,
         }
 
     @router.post("/{connector_id}/disconnect")

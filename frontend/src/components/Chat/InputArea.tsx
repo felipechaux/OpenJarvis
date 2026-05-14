@@ -5,6 +5,8 @@ import { streamChat } from '../../lib/sse';
 import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
+import { useTTS } from '../../hooks/useTTS';
+import { WAKE_EVENT } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 export function InputArea() {
@@ -18,6 +20,7 @@ export function InputArea() {
   const streamState = useAppStore((s) => s.streamState);
   const messages = useAppStore((s) => s.messages);
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
+  const ttsEnabled = useAppStore((s) => s.settings.ttsEnabled);
   const maxTokens = useAppStore((s) => s.settings.maxTokens);
   const temperature = useAppStore((s) => s.settings.temperature);
   const createConversation = useAppStore((s) => s.createConversation);
@@ -28,6 +31,19 @@ export function InputArea() {
   const modelLoading = useAppStore((s) => s.modelLoading);
 
   const { state: speechState, available: speechAvailable, startRecording, stopRecording } = useSpeech();
+  const { enqueue: enqueueSpeech, stop: stopSpeaking, speaking: ttsSpeaking, audioData: ttsAudioData } = useTTS();
+
+  // Sync TTS state to store for ArcReactor visualization
+  const setTTSSpeaking = useAppStore((s) => s.setTTSSpeaking);
+  const setTTSAudioData = useAppStore((s) => s.setTTSAudioData);
+
+  useEffect(() => {
+    setTTSSpeaking(ttsSpeaking);
+  }, [ttsSpeaking, setTTSSpeaking]);
+
+  useEffect(() => {
+    setTTSAudioData(ttsAudioData);
+  }, [ttsAudioData, setTTSAudioData]);
 
   // Abort in-flight stream when the user switches models mid-generation.
   // This prevents errors from trying to continue a stream with a stale model.
@@ -52,12 +68,31 @@ export function InputArea() {
     : streamState.isStreaming ? 'streaming'
     : undefined;
 
+  // Start mic automatically when wake word is detected
+  useEffect(() => {
+    const onWake = () => {
+      if (!micDisabled && speechState === 'idle') {
+        startRecording();
+      }
+    };
+    window.addEventListener(WAKE_EVENT, onWake);
+    return () => window.removeEventListener(WAKE_EVENT, onWake);
+  }, [micDisabled, speechState, startRecording]);
+
+  // Track if we should auto-send after transcription
+  const autoSendAfterTranscriptionRef = useRef(false);
+
   const handleMicClick = useCallback(async () => {
     if (speechState === 'recording') {
       try {
         const text = await stopRecording();
         if (text) {
-          setInput((prev) => (prev ? prev + ' ' + text : text));
+          setInput((prev) => {
+            const newInput = prev ? prev + ' ' + text : text;
+            // Mark for auto-send after transcription completes
+            autoSendAfterTranscriptionRef.current = true;
+            return newInput;
+          });
         }
       } catch {
         // Error is captured in useSpeech
@@ -87,6 +122,7 @@ export function InputArea() {
     const content = input.trim();
     if (!content || streamState.isStreaming) return;
 
+    stopSpeaking();
     setInput('');
 
     let convId = activeId;
@@ -128,6 +164,7 @@ export function InputArea() {
     abortRef.current = controller;
 
     let accumulatedContent = '';
+    let ttsSentenceBuffer = '';
     let usage: TokenUsage | undefined;
     let complexity: { score: number; tier: string; suggested_max_tokens: number } | undefined;
     const toolCalls: ToolCallInfo[] = [];
@@ -166,10 +203,20 @@ export function InputArea() {
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);
+            // Defensive normalisation: the backend sends a JSON string, but
+            // an older build sent the raw dict — passing that through to
+            // ToolCallCard's <pre> crashes React with
+            // "Objects are not valid as a React child".
+            const argsAsString =
+              typeof data.arguments === 'string'
+                ? data.arguments
+                : data.arguments == null
+                  ? ''
+                  : JSON.stringify(data.arguments);
             const tc: ToolCallInfo = {
               id: generateId(),
               tool: data.tool,
-              arguments: data.arguments || '',
+              arguments: argsAsString,
               status: 'running',
             };
             toolCalls.push(tc);
@@ -180,7 +227,7 @@ export function InputArea() {
             updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
             useAppStore.getState().addLogEntry({
               timestamp: Date.now(), level: 'info', category: 'tool',
-              message: `Calling ${data.tool}(${data.arguments || ''})`,
+              message: `Calling ${data.tool}(${argsAsString})`,
             });
           } catch {}
         } else if (eventName === 'tool_call_end') {
@@ -209,6 +256,7 @@ export function InputArea() {
             if (delta?.content) {
               if (!ttftMs) ttftMs = Date.now() - startTime;
               accumulatedContent += delta.content;
+              ttsSentenceBuffer += delta.content;
               setStreamState({ content: accumulatedContent, phase: '' });
 
               const now = Date.now();
@@ -219,6 +267,15 @@ export function InputArea() {
                   toolCalls.length > 0 ? [...toolCalls] : undefined,
                 );
                 lastFlush = now;
+              }
+
+              // Speak each complete sentence as it arrives (skip abbreviation periods)
+              if (ttsEnabled && !controller.signal.aborted) {
+                const match = ttsSentenceBuffer.match(/^([\s\S]*?(?<!\b(?:Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|No|Fig))[.!?;:])\s+/);
+                if (match) {
+                  enqueueSpeech(match[1].trim());
+                  ttsSentenceBuffer = ttsSentenceBuffer.slice(match[0].length);
+                }
               }
             }
             if (data.choices?.[0]?.finish_reason === 'stop') break;
@@ -279,6 +336,7 @@ export function InputArea() {
         telemetry,
         audioMeta,
       );
+      if (ttsEnabled && ttsSentenceBuffer.trim()) enqueueSpeech(ttsSentenceBuffer.trim());
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -304,7 +362,17 @@ export function InputArea() {
     updateLastAssistant,
     setStreamState,
     resetStream,
+    enqueueSpeech,
+    stopSpeaking,
   ]);
+
+  // Auto-send message when transcription finishes and input is updated
+  useEffect(() => {
+    if (autoSendAfterTranscriptionRef.current && input.trim() && !streamState.isStreaming && speechState === 'idle') {
+      autoSendAfterTranscriptionRef.current = false;
+      sendMessage();
+    }
+  }, [input, speechState, streamState.isStreaming, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -316,7 +384,7 @@ export function InputArea() {
   return (
     <div className="px-4 pb-4 pt-2" style={{ maxWidth: 'var(--chat-max-width)', margin: '0 auto', width: '100%' }}>
       <div
-        className="flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
+        className={`flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow${streamState.isStreaming ? ' jarvis-streaming-input' : ''}`}
         style={{
           background: 'var(--color-input-bg)',
           border: '1px solid var(--color-input-border)',
@@ -345,6 +413,16 @@ export function InputArea() {
           </button>
         ) : (
           <div className="flex items-center gap-1">
+            {ttsSpeaking && (
+              <button
+                onClick={stopSpeaking}
+                title="Stop speaking"
+                className="p-2 rounded-xl transition-colors shrink-0 cursor-pointer"
+                style={{ background: 'var(--color-accent)', color: 'white', opacity: 0.85 }}
+              >
+                <Square size={14} />
+              </button>
+            )}
             <MicButton
               state={speechState}
               onClick={handleMicClick}

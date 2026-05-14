@@ -17,6 +17,7 @@ from openjarvis.connectors.oauth import (
     GOOGLE_ALL_SCOPES,
     build_google_auth_url,
     delete_tokens,
+    get_valid_google_token,
     load_tokens,
     resolve_google_credentials,
     run_oauth_flow,
@@ -67,6 +68,7 @@ def _gcal_api_events_list(
     *,
     page_token: Optional[str] = None,
     time_min: Optional[str] = None,
+    time_max: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Call the Calendar ``events.list`` endpoint for a single calendar.
 
@@ -81,6 +83,8 @@ def _gcal_api_events_list(
     time_min:
         Lower bound (exclusive) for an event's end time (RFC3339 timestamp).
         When omitted the API returns all events.
+    time_max:
+        Upper bound (exclusive) for an event's start time (RFC3339 timestamp).
 
     Returns
     -------
@@ -97,6 +101,8 @@ def _gcal_api_events_list(
         params["pageToken"] = page_token
     if time_min:
         params["timeMin"] = time_min
+    if time_max:
+        params["timeMax"] = time_max
 
     resp = httpx.get(
         f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
@@ -220,39 +226,43 @@ class GCalendarConnector(BaseConnector):
 
     def is_connected(self) -> bool:
         """Return ``True`` if a credentials file with a valid access token exists."""
-        tokens = load_tokens(self._credentials_path)
-        if tokens is None:
-            return False
-        # Must have an actual access_token, not just a client_id
-        return bool(tokens.get("access_token") or tokens.get("token"))
+        return bool(get_valid_google_token(self._credentials_path))
 
     def disconnect(self) -> None:
         """Delete the stored credentials file."""
         delete_tokens(self._credentials_path)
 
-    def auth_url(self) -> str:
-        """Return a Google OAuth consent URL requesting ``calendar.readonly`` scope."""
+    def auth_url(self, redirect_uri: Optional[str] = None) -> str:
+        """Return a Google OAuth consent URL requesting ``calendar.readonly`` scope.
+
+        Parameters
+        ----------
+        redirect_uri:
+            OAuth callback URL. If provided, overrides the default localhost loopback.
+        """
         tokens = load_tokens(self._credentials_path)
         client_id = ""
         if tokens:
             client_id = tokens.get("client_id", "")
         if not client_id:
             return "https://console.cloud.google.com/apis/credentials"
+
+        from openjarvis.connectors.oauth import _DEFAULT_REDIRECT_URI
+
         return build_google_auth_url(
             client_id=client_id,
             scopes=GOOGLE_ALL_SCOPES,
+            redirect_uri=redirect_uri or _DEFAULT_REDIRECT_URI,
         )
 
     def handle_callback(self, code: str) -> None:
-        """Handle the OAuth callback.
+        """Handle the OAuth callback / manual credential entry.
 
-        If *code* looks like a ``client_id:client_secret`` pair (containing
-        ``.apps.googleusercontent.com``), store the credentials and trigger
-        the full browser-based OAuth flow.  Otherwise treat it as a raw
-        token / auth code.
+        This is kept for backward compatibility with CLI-based flows.
+        For server-managed flows, the token exchange is handled by the router.
         """
         code = code.strip()
-        # If user pastes client_id:client_secret, store and run OAuth flow
+        # If user pastes client_id:client_secret, store them
         if ":" in code and ".apps.googleusercontent.com" in code:
             client_id, client_secret = code.split(":", 1)
             save_tokens(
@@ -262,20 +272,6 @@ class GCalendarConnector(BaseConnector):
                     "client_secret": client_secret.strip(),
                 },
             )
-            import threading
-
-            def _run() -> None:
-                try:
-                    run_oauth_flow(
-                        client_id=client_id.strip(),
-                        client_secret=client_secret.strip(),
-                        scopes=GOOGLE_ALL_SCOPES,
-                        credentials_path=self._credentials_path,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-
-            threading.Thread(target=_run, daemon=True).start()
         else:
             # Raw token or auth code
             save_tokens(self._credentials_path, {"token": code})
@@ -299,11 +295,7 @@ class GCalendarConnector(BaseConnector):
         cursor:
             ``nextPageToken`` from a previous sync to resume pagination.
         """
-        tokens = load_tokens(self._credentials_path)
-        if not tokens:
-            return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
+        token = get_valid_google_token(self._credentials_path)
         if not token:
             return
 
@@ -316,6 +308,8 @@ class GCalendarConnector(BaseConnector):
             since = datetime.now() - timedelta(days=1)
         time_min = since.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+        # Limit to the next 7 days from now to avoid overwhelming context
+        time_max = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%dT23:59:59Z")
         synced = 0
 
         for calendar in calendars:
@@ -332,6 +326,7 @@ class GCalendarConnector(BaseConnector):
                         calendar_id,
                         page_token=page_token,
                         time_min=time_min,
+                        time_max=time_max,
                     )
                 except httpx.HTTPStatusError:
                     break

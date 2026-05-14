@@ -775,12 +775,117 @@ async def transcribe_speech(request: Request):
 async def speech_health(request: Request):
     """Check if a speech backend is available."""
     backend = getattr(request.app.state, "speech_backend", None)
-    if backend is None:
-        return {"available": False, "reason": "No speech backend configured"}
+    tts = getattr(request.app.state, "tts_backend", None)
     return {
-        "available": backend.health(),
-        "backend": backend.backend_id,
+        "available": backend.health() if backend else False,
+        "backend": backend.backend_id if backend else None,
+        "tts_available": tts.health() if tts else False,
+        "tts_backend": tts.backend_id if tts else None,
     }
+
+
+@speech_router.post("/synthesize")
+async def synthesize_speech(request: Request):
+    """Synthesize text to speech audio using the configured TTS backend."""
+    from fastapi.responses import Response
+
+    tts = getattr(request.app.state, "tts_backend", None)
+    if tts is None:
+        raise HTTPException(status_code=501, detail="TTS backend not configured")
+
+    body = await request.json()
+    text: str = body.get("text", "").strip()
+    # Default to JARVIS British voice; fall back to kokoro default if not edge-tts
+    default_voice = "en-GB-RyanNeural" if tts.backend_id == "edge_tts" else "af_heart"
+    voice_id: str = body.get("voice_id", default_voice)
+    speed: float = float(body.get("speed", 1.0))
+
+    if not text:
+        raise HTTPException(status_code=400, detail="Missing 'text' field")
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    # edge-tts outputs MP3; kokoro outputs WAV
+    fmt = "mp3" if tts.backend_id == "edge_tts" else "wav"
+    result = await loop.run_in_executor(
+        None, lambda: tts.synthesize(text, voice_id=voice_id, speed=speed, output_format=fmt)
+    )
+    media_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
+    return Response(content=result.audio, media_type=media_type)
+
+
+@speech_router.get("/tts/voices")
+async def tts_voices(request: Request):
+    """Return available TTS voices."""
+    tts = getattr(request.app.state, "tts_backend", None)
+    if tts is None:
+        return {"voices": []}
+    return {"voices": tts.available_voices()}
+
+
+@speech_router.post("/wake-word/detect")
+async def detect_wake_word(request: Request):
+    """Fast wake-word detection using a tiny Whisper model.
+
+    Accepts the same multipart ``file`` field as /transcribe but uses a
+    dedicated tiny model instance so it doesn't block the main STT backend.
+    Returns ``{"detected": bool, "text": str}``.
+    """
+    import asyncio
+    import tempfile
+
+    # Lazy-init a tiny model stored on app state (loaded once, reused)
+    model = getattr(request.app.state, "_wake_word_model", None)
+    if model is None:
+        try:
+            from faster_whisper import WhisperModel
+
+            def _load():
+                return WhisperModel("tiny", device="auto", compute_type="int8")
+
+            loop = asyncio.get_event_loop()
+            model = await loop.run_in_executor(None, _load)
+            request.app.state._wake_word_model = model
+        except Exception as exc:
+            logger.warning("Wake word model unavailable: %s", exc)
+            return {"detected": False, "text": ""}
+
+    form = await request.form()
+    audio_file = form.get("file")
+    if audio_file is None:
+        return {"detected": False, "text": ""}
+
+    audio_bytes = await audio_file.read()
+    if len(audio_bytes) < 500:
+        return {"detected": False, "text": ""}
+
+    filename = getattr(audio_file, "filename", "wake.webm")
+    suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".webm"
+
+    def _transcribe():
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            segs, _ = model.transcribe(
+                tmp.name,
+                language="en",
+                beam_size=1,
+                best_of=1,
+                condition_on_previous_text=False,
+            )
+            return "".join(s.text for s in segs).strip().lower()
+
+    try:
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _transcribe)
+        wake_phrases = ["jarvis", "hi jarvis", "hey jarvis", "hello jarvis"]
+        detected = any(p in text for p in wake_phrases)
+        if detected:
+            logger.info("Wake word detected: '%s'", text)
+        return {"detected": detected, "text": text}
+    except Exception as exc:
+        logger.warning("Wake word detection error: %s", exc)
+        return {"detected": False, "text": ""}
 
 
 # ---- Feedback routes ----

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Palette,
   Globe,
@@ -18,7 +18,7 @@ import {
   Brain,
 } from 'lucide-react';
 import { useAppStore, type ThemeMode } from '../lib/store';
-import { checkHealth, fetchSpeechHealth, getMemoryStats } from '../lib/api';
+import { checkHealth, fetchSpeechHealth, getMemoryStats, getBase } from '../lib/api';
 
 function OllamaModelList() {
   const [models, setModels] = useState<Array<{ name: string; size: number }>>([]);
@@ -42,20 +42,46 @@ function OllamaModelList() {
   );
 }
 
+const _STORAGE_KEY_TO_ENV: Record<string, string> = {
+  'openjarvis-openai-key': 'OPENAI_API_KEY',
+  'openjarvis-anthropic-key': 'ANTHROPIC_API_KEY',
+  'openjarvis-gemini-key': 'GEMINI_API_KEY',
+  'openjarvis-openrouter-key': 'OPENROUTER_API_KEY',
+  'openjarvis-minimax-key': 'MINIMAX_API_KEY',
+};
+
+async function persistKeyToBackend(envName: string, value: string) {
+  try {
+    await fetch(`${getBase()}/v1/cloud/keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ env_name: envName, key_value: value }),
+    });
+  } catch { /* best-effort */ }
+}
+
 function ApiKeyInput({ storageKey, placeholder }: { storageKey: string; placeholder: string }) {
   const [value, setValue] = useState(() => {
     try { return localStorage.getItem(storageKey) || ''; } catch { return ''; }
   });
   const [saved, setSaved] = useState(false);
-  const save = (v: string) => {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleChange = (v: string) => {
     setValue(v);
     try { if (v) localStorage.setItem(storageKey, v); else localStorage.removeItem(storageKey); } catch {}
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(async () => {
+      const envName = _STORAGE_KEY_TO_ENV[storageKey];
+      if (envName) await persistKeyToBackend(envName, v);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    }, 600);
   };
+
   return (
     <div className="flex items-center gap-2">
-      <input type="password" value={value} onChange={e => save(e.target.value)} placeholder={placeholder}
+      <input type="password" value={value} onChange={e => handleChange(e.target.value)} placeholder={placeholder}
         className="w-48 px-2 py-1 rounded text-xs"
         style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }} />
       {saved && <span className="text-[10px]" style={{ color: 'var(--color-success)' }}>Saved</span>}
@@ -64,9 +90,19 @@ function ApiKeyInput({ storageKey, placeholder }: { storageKey: string; placehol
 }
 
 function CloudProviderStatus({ label, storageKey }: { label: string; storageKey: string }) {
-  const [hasKey, setHasKey] = useState(false);
+  const [hasKey, setHasKey] = useState(() => {
+    try { return !!localStorage.getItem(storageKey); } catch { return false; }
+  });
   useEffect(() => {
-    try { setHasKey(!!localStorage.getItem(storageKey)); } catch { setHasKey(false); }
+    fetch(`${getBase()}/v1/cloud/keys/status`)
+      .then(r => r.json())
+      .then((status: Record<string, boolean>) => {
+        const envName = _STORAGE_KEY_TO_ENV[storageKey];
+        if (envName) setHasKey(!!status[envName]);
+      })
+      .catch(() => {
+        try { setHasKey(!!localStorage.getItem(storageKey)); } catch { setHasKey(false); }
+      });
   }, [storageKey]);
   return (
     <span className="flex items-center gap-1 text-xs" style={{ color: 'var(--color-text-secondary)' }}>
@@ -147,6 +183,19 @@ export function SettingsPage() {
     getMemoryStats()
       .then(setMemoryStats)
       .catch(() => setMemoryStats(null));
+
+    // Sync any API keys already in localStorage to the backend file.
+    fetch(`${getBase()}/v1/cloud/keys/status`)
+      .then(r => r.json())
+      .then(async (status: Record<string, boolean>) => {
+        for (const [storageKey, envName] of Object.entries(_STORAGE_KEY_TO_ENV)) {
+          if (!status[envName]) {
+            const stored = localStorage.getItem(storageKey);
+            if (stored) await persistKeyToBackend(envName, stored);
+          }
+        }
+      })
+      .catch(() => {});
   }, []);
 
   const showSaved = () => {
@@ -480,6 +529,21 @@ export function SettingsPage() {
                   className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
                   style={{
                     transform: settings.speechEnabled ? 'translateX(20px)' : 'translateX(0)',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                  }}
+                />
+              </button>
+            </SettingRow>
+            <SettingRow label="Text-to-Speech" description="Jarvis speaks responses aloud using Kokoro (local, open-source)">
+              <button
+                onClick={() => { updateSettings({ ttsEnabled: !settings.ttsEnabled }); showSaved(); }}
+                className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+                style={{ background: settings.ttsEnabled ? 'var(--color-accent)' : 'var(--color-bg-tertiary)' }}
+              >
+                <span
+                  className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+                  style={{
+                    transform: settings.ttsEnabled ? 'translateX(20px)' : 'translateX(0)',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
                   }}
                 />

@@ -552,8 +552,22 @@ function DataSourcesSection() {
     setConnectingId(id);
     setConnectStage('Connecting...');
     setConnectError('');
+    const meta = SOURCE_CATALOG.find((s) => s.connector_id === id);
     try {
-      await connectSource(id, req);
+      const detail = (await connectSource(id, req)) as any;
+      if (meta?.auth_type === 'oauth') {
+        if (detail.auth_url) {
+          window.open(detail.auth_url, '_blank');
+        }
+        // For OAuth, we've saved the credentials. Now the user needs to 
+        // complete the flow in the browser. We stop here and let the
+        // background poller detect the connection.
+        setConnectStage('Waiting for browser authorization...');
+        await new Promise((r) => setTimeout(r, 2000));
+        setExpandedId(null);
+        return;
+      }
+
       setConnectStage('Connected! Starting sync...');
 
       // Wait for connector to show as connected

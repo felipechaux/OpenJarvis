@@ -29,6 +29,7 @@ _SECTION_ORDER: List[tuple] = [
             "whatsapp",
             "outlook",
             "notion",
+            "apple_notes",
             "github_notifications",
         },
     ),
@@ -77,7 +78,20 @@ def _time_ago(ts: datetime) -> str:
 
 
 def _format_date(ts: datetime) -> str:
-    """Format a datetime as 'April 1' style."""
+    """Format a datetime as 'Today', 'Tomorrow', or 'April 1' style."""
+    now = datetime.now()
+    ts_date = ts.date()
+    today = now.date()
+    tomorrow = today + timedelta(days=1)
+    yesterday = today - timedelta(days=1)
+
+    if ts_date == today:
+        return "Today"
+    if ts_date == tomorrow:
+        return "Tomorrow"
+    if ts_date == yesterday:
+        return "Yesterday"
+
     return ts.strftime("%B %-d") if hasattr(ts, "strftime") else str(ts)
 
 
@@ -149,6 +163,18 @@ def _format_oura(doc: Document) -> str:
 def _format_apple_health(doc: Document) -> str:
     """Format an Apple Health document."""
     return f"[apple_health] {doc.title}"
+
+
+def _format_apple_notes(doc: Document) -> str:
+    """Format an Apple Note document."""
+    title = doc.title or "Untitled Note"
+    ago = _time_ago(doc.timestamp)
+    # Include snippet (first 100 chars)
+    snippet = doc.content.replace("\n", " ").strip()[:100] if doc.content else ""
+    line = f"[apple_notes] {title} ({ago})"
+    if snippet:
+        line += f": {snippet}"
+    return line
 
 
 def _format_strava(doc: Document) -> str:
@@ -244,6 +270,7 @@ def _format_notion(doc: Document) -> str:
 def _format_gcalendar(doc: Document) -> str:
     """Format a Google Calendar event document."""
     title = doc.title or "(No title)"
+    date_str = _format_date(doc.timestamp)
     time_str = _format_time(doc.timestamp)
     # Try to extract duration from content
     duration_match = (
@@ -271,7 +298,7 @@ def _format_gcalendar(doc: Document) -> str:
                 time_range = f" ({duration})"
             except (ValueError, TypeError):
                 pass
-    return f"[gcalendar] {time_str} — {title}{time_range}"
+    return f"[gcalendar] {date_str} {time_str} — {title}{time_range}"
 
 
 def _format_spotify(doc: Document) -> str:
@@ -341,6 +368,7 @@ _FORMATTERS: Dict[str, Any] = {
     "whatsapp": _format_whatsapp,
     "outlook": _format_outlook,
     "notion": _format_notion,
+    "apple_notes": _format_apple_notes,
     "gcalendar": _format_gcalendar,
     "weather": _format_weather,
     "github_notifications": _format_github_notifications,
@@ -448,7 +476,7 @@ class DigestCollectTool(BaseTool):
                     continue
 
                 # Cap per-source to avoid overwhelming the LLM context
-                max_per_source = 15
+                max_per_source = 40
                 docs: List[Document] = []
                 for d in connector.sync(since=since):
                     docs.append(d)
@@ -462,14 +490,15 @@ class DigestCollectTool(BaseTool):
         # Group by section and build human-readable output
         summary_parts: List[str] = []
         for section_name, section_connectors in _SECTION_ORDER:
-            # Gather all sources that belong to this section and have data
+            # Gather all sources that belong to this section
             section_sources = [
-                s for s in sources if s in section_connectors and s in collected_docs
+                s for s in sources if s in section_connectors
             ]
             if not section_sources:
                 continue
 
             section_lines: List[str] = []
+            empty_sources: List[str] = []
 
             if section_name == "MUSIC":
                 # Music gets special grouped formatting
@@ -478,12 +507,20 @@ class DigestCollectTool(BaseTool):
                 )
             else:
                 for source in section_sources:
-                    for doc in collected_docs[source]:
-                        section_lines.append(_format_doc(source, doc))
+                    docs = collected_docs.get(source, [])
+                    if docs:
+                        for doc in docs:
+                            section_lines.append(_format_doc(source, doc))
+                    else:
+                        empty_sources.append(source)
 
-            if section_lines:
+            if section_lines or empty_sources:
                 summary_parts.append(f"=== {section_name} ===")
-                summary_parts.extend(section_lines)
+                if section_lines:
+                    summary_parts.extend(section_lines)
+                if empty_sources:
+                    for es in empty_sources:
+                        summary_parts.append(f"[{es}] (No recent data found)")
                 summary_parts.append("")  # blank line between sections
 
         # Handle any connectors not in a known section (fallback)
@@ -492,19 +529,18 @@ class DigestCollectTool(BaseTool):
             known_connectors |= cids
 
         uncategorized_sources = [
-            s for s in sources if s not in known_connectors and s in collected_docs
+            s for s in sources if s not in known_connectors
         ]
         if uncategorized_sources:
             summary_parts.append("=== OTHER ===")
             for source in uncategorized_sources:
-                for doc in collected_docs[source]:
-                    summary_parts.append(_format_doc(source, doc))
+                docs = collected_docs.get(source, [])
+                if docs:
+                    for doc in docs:
+                        summary_parts.append(_format_doc(source, doc))
+                else:
+                    summary_parts.append(f"[{source}] (No recent data found)")
             summary_parts.append("")
-
-        # Errors at the end, not inline
-        if errors:
-            summary_parts.append("=== ERRORS ===")
-            summary_parts.extend(errors)
 
         return ToolResult(
             tool_name="digest_collect",

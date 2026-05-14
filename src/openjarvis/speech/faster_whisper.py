@@ -24,7 +24,7 @@ class FasterWhisperBackend(SpeechBackend):
         self,
         model_size: str = "base",
         device: str = "auto",
-        compute_type: str = "float16",
+        compute_type: str = "auto",
     ) -> None:
         self._model_size = model_size
         self._device = device
@@ -39,11 +39,21 @@ class FasterWhisperBackend(SpeechBackend):
                     "faster-whisper is not installed. "
                     "Install with: uv sync --extra speech"
                 )
-            self._model = WhisperModel(
-                self._model_size,
-                device=self._device,
-                compute_type=self._compute_type,
-            )
+            compute_type = self._compute_type
+            if compute_type == "auto":
+                compute_type = "int8"
+            for ct in [compute_type, "int8", "float32"]:
+                try:
+                    self._model = WhisperModel(
+                        self._model_size,
+                        device=self._device,
+                        compute_type=ct,
+                    )
+                    break
+                except (ValueError, RuntimeError):
+                    continue
+            if self._model is None:
+                raise RuntimeError("Could not initialize Whisper model with any supported compute type")
         return self._model
 
     def transcribe(

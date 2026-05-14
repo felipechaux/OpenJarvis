@@ -137,7 +137,17 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.weather  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.knowledge_search  # noqa: F401
 except ImportError:
     pass
 

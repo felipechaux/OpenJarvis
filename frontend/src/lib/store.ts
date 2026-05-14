@@ -12,6 +12,7 @@ import type {
   TokenUsage,
 } from '../types';
 import type { ManagedAgent } from './api';
+import type { AudioAnalyzerData } from '../hooks/useTTS';
 
 export interface CachedConnector {
   connector_id: string;
@@ -30,6 +31,7 @@ export interface AgentEvent {
 
 const CONVERSATIONS_KEY = 'openjarvis-conversations';
 const SETTINGS_KEY = 'openjarvis-settings';
+const SELECTED_MODEL_KEY = 'openjarvis-selected-model';
 const OPTIN_KEY = 'openjarvis-optin';
 const OPTIN_NAME_KEY = 'openjarvis-display-name';
 const OPTIN_EMAIL_KEY = 'openjarvis-email';
@@ -73,6 +75,7 @@ interface Settings {
   temperature: number;
   maxTokens: number;
   speechEnabled: boolean;
+  ttsEnabled: boolean;
 }
 
 function loadSettings(): Settings {
@@ -84,7 +87,8 @@ function loadSettings(): Settings {
     defaultAgent: '',
     temperature: 0.7,
     maxTokens: 4096,
-    speechEnabled: false,
+    speechEnabled: true,
+    ttsEnabled: true,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -211,6 +215,16 @@ interface AppState {
   // Model loading
   modelLoading: boolean;
   setModelLoading: (loading: boolean) => void;
+
+  // TTS / Voice state
+  ttsSpeaking: boolean;
+  ttsAudioData: AudioAnalyzerData;
+  setTTSSpeaking: (speaking: boolean) => void;
+  setTTSAudioData: (data: AudioAnalyzerData) => void;
+
+  // Initial greeting
+  greeted: boolean;
+  setGreeted: (greeted: boolean) => void;
 }
 
 export const useAppStore = create<AppState>((set, get) => {
@@ -230,7 +244,7 @@ export const useAppStore = create<AppState>((set, get) => {
 
     models: [],
     modelsLoading: true,
-    selectedModel: '',
+    selectedModel: localStorage.getItem(SELECTED_MODEL_KEY) || '',
     serverInfo: null,
     savings: null,
 
@@ -410,7 +424,13 @@ export const useAppStore = create<AppState>((set, get) => {
 
     setModels: (models: ModelInfo[]) => set({ models }),
     setModelsLoading: (loading: boolean) => set({ modelsLoading: loading }),
-    setSelectedModel: (model: string) => set({ selectedModel: model }),
+    setSelectedModel: (model: string) => {
+      try {
+        if (model) localStorage.setItem(SELECTED_MODEL_KEY, model);
+        else localStorage.removeItem(SELECTED_MODEL_KEY);
+      } catch { /* ignore quota errors */ }
+      set({ selectedModel: model });
+    },
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
 
@@ -459,6 +479,21 @@ export const useAppStore = create<AppState>((set, get) => {
     // ── Model loading ───────────────────────────────────────────────
     modelLoading: false,
     setModelLoading: (loading) => set({ modelLoading: loading }),
+
+    // ── TTS / Voice ─────────────────────────────────────────────────
+    ttsSpeaking: false,
+    ttsAudioData: {
+      frequencyData: null,
+      averageLevel: 0,
+      bassLevel: 0,
+      trebleLevel: 0,
+    },
+    setTTSSpeaking: (speaking) => set({ ttsSpeaking: speaking }),
+    setTTSAudioData: (data) => set({ ttsAudioData: data }),
+
+    // ── Initial Greeting ─────────────────────────────────────────────
+    greeted: false,
+    setGreeted: (greeted: boolean) => set({ greeted }),
 
     // ── Opt-in sharing ──────────────────────────────────────────────
 

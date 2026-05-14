@@ -3,6 +3,275 @@
 @import "shadcn/tailwind.css";
 @custom-variant dark (&:is(.dark *));
 
+/* ─── JARVIS THEME OVERRIDE ──────────────────────────────────────────────── */
+/* Forces JARVIS dark mode globally — replaces light defaults */
+:root {
+  --color-bg:               #020408;
+  --color-bg-secondary:     #050d18;
+  --color-bg-tertiary:      #0a1628;
+  --color-surface:          #060e1c;
+  --color-sidebar:          rgba(3, 8, 18, 0.96);
+  --color-border:           rgba(0, 212, 255, 0.12);
+  --color-border-subtle:    rgba(0, 212, 255, 0.06);
+
+  --color-text:             #d6eeff;
+  --color-text-secondary:   #4d8fa8;
+  --color-text-tertiary:    #2a5970;
+  --color-text-inverse:     #020408;
+
+  --color-accent:           #00d4ff;
+  --color-accent-hover:     #33ddff;
+  --color-accent-subtle:    rgba(0, 212, 255, 0.08);
+  --color-accent-glow:      rgba(0, 212, 255, 0.35);
+
+  --color-accent-amber:     #ff9f00;
+  --color-accent-amber-hover: #ffb733;
+  --color-accent-amber-subtle: rgba(255, 159, 0, 0.1);
+  --color-accent-purple:    #7b5fff;
+  --color-accent-purple-hover: #9b7fff;
+  --color-accent-purple-subtle: rgba(123, 95, 255, 0.1);
+  --color-accent-blue-subtle: rgba(0, 212, 255, 0.08);
+
+  --color-success:          #00ffb3;
+  --color-warning:          #ff9f00;
+  --color-error:            #ff4466;
+
+  --color-code-bg:          #030a14;
+  --color-input-bg:         #030c1a;
+  --color-input-border:     rgba(0, 212, 255, 0.18);
+
+  --color-user-bubble:      rgba(0, 212, 255, 0.1);
+  --color-user-bubble-text: #cceeff;
+  --color-on-accent:        #020408;
+  --color-disabled-bg:      #0a1628;
+
+  --shadow-sm:  0 1px 3px 0 rgba(0, 0, 0, 0.7);
+  --shadow-md:  0 4px 16px -2px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(0, 212, 255, 0.05);
+  --shadow-lg:  0 18px 48px -12px rgba(0, 0, 0, 0.9), 0 0 0 1px rgba(0, 212, 255, 0.08);
+
+  color-scheme: dark;
+}
+
+/* Disable light overrides — JARVIS is always dark */
+@media (prefers-color-scheme: light) {
+  :root:not(.light) {
+    color-scheme: dark;
+  }
+}
+
+/* ─── JARVIS ANIMATIONS ──────────────────────────────────────────────────── */
+@keyframes jarvis-scan {
+  0%   { transform: translateY(-100%); opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { transform: translateY(100vh); opacity: 0; }
+}
+
+@keyframes jarvis-pulse-ring {
+  0%   { transform: scale(0.95); opacity: 0.8; }
+  50%  { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+@keyframes jarvis-flicker {
+  0%, 97%, 100% { opacity: 1; }
+  98%            { opacity: 0.6; }
+  99%            { opacity: 0.9; }
+}
+
+@keyframes jarvis-arc-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes jarvis-arc-counter {
+  from { transform: rotate(360deg); }
+  to   { transform: rotate(0deg); }
+}
+
+@keyframes jarvis-slide-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+/* Equalizer bar animation — each bar gets a different height rhythm */
+@keyframes jarvis-eq-1 {
+  0%,100% { height: 4px;  } 20% { height: 14px; } 40% { height: 6px;  } 60% { height: 18px; } 80% { height: 8px; }
+}
+@keyframes jarvis-eq-2 {
+  0%,100% { height: 10px; } 20% { height: 4px;  } 40% { height: 20px; } 60% { height: 8px;  } 80% { height: 16px; }
+}
+@keyframes jarvis-eq-3 {
+  0%,100% { height: 18px; } 20% { height: 8px;  } 40% { height: 4px;  } 60% { height: 14px; } 80% { height: 6px; }
+}
+@keyframes jarvis-eq-4 {
+  0%,100% { height: 6px;  } 20% { height: 18px; } 40% { height: 10px; } 60% { height: 4px;  } 80% { height: 20px; }
+}
+@keyframes jarvis-eq-5 {
+  0%,100% { height: 14px; } 20% { height: 6px;  } 40% { height: 16px; } 60% { height: 10px; } 80% { height: 4px; }
+}
+
+/* Mic waveform bars — faster, more reactive */
+@keyframes jarvis-wave-1 { 0%,100% { height: 3px;  } 50% { height: 10px; } }
+@keyframes jarvis-wave-2 { 0%,100% { height: 8px;  } 50% { height: 3px;  } }
+@keyframes jarvis-wave-3 { 0%,100% { height: 12px; } 50% { height: 4px;  } }
+@keyframes jarvis-wave-4 { 0%,100% { height: 5px;  } 50% { height: 14px; } }
+@keyframes jarvis-wave-5 { 0%,100% { height: 9px;  } 50% { height: 3px;  } }
+
+/* Message slide-in */
+@keyframes jarvis-msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Arc reactor outer ring spin */
+@keyframes jarvis-ring-cw  { from { transform: rotate(0deg);   } to { transform: rotate(360deg);  } }
+@keyframes jarvis-ring-ccw { from { transform: rotate(360deg); } to { transform: rotate(0deg);    } }
+
+/* Input border pulse while streaming */
+@keyframes jarvis-stream-border {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(0,212,255,0.3), 0 0 12px -4px rgba(0,212,255,0.2); }
+  50%       { box-shadow: 0 0 0 1px rgba(0,212,255,0.6), 0 0 24px -4px rgba(0,212,255,0.35); }
+}
+
+.jarvis-streaming-input {
+  animation: jarvis-stream-border 1.8s ease-in-out infinite !important;
+  border-color: rgba(0,212,255,0.4) !important;
+}
+
+/* ─── JARVIS BACKDROP ────────────────────────────────────────────────────── */
+/* Override the existing hud-backdrop with JARVIS version */
+.hud-backdrop {
+  background-image:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(0, 212, 255, 0.07), transparent),
+    radial-gradient(ellipse 50% 40% at 100% 60%, rgba(0, 80, 200, 0.05), transparent),
+    radial-gradient(ellipse 40% 50% at 0% 80%, rgba(0, 212, 255, 0.04), transparent);
+}
+
+.hud-backdrop::before {
+  background-image:
+    linear-gradient(rgba(0, 212, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 212, 255, 0.04) 1px, transparent 1px);
+  background-size: 40px 40px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 80%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 30%, transparent 80%);
+  opacity: 0.7;
+}
+
+/* Scan line beam */
+.hud-backdrop::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    transparent,
+    rgba(0, 212, 255, 0.08) 20%,
+    rgba(0, 212, 255, 0.25) 50%,
+    rgba(0, 212, 255, 0.08) 80%,
+    transparent
+  );
+  animation: jarvis-scan 8s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── JARVIS UI COMPONENTS ───────────────────────────────────────────────── */
+
+/* Arc reactor dot used in titlebar */
+.jarvis-arc-dot {
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: 0 0 6px var(--color-accent), 0 0 12px var(--color-accent-glow);
+  animation: jarvis-pulse-ring 2s ease-in-out infinite;
+}
+
+/* Window control buttons */
+.jarvis-wbtn {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  transition: filter 0.15s;
+  flex-shrink: 0;
+}
+.jarvis-wbtn:hover { filter: brightness(1.25); }
+
+/* Glowing input */
+input, textarea {
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+input:focus, textarea:focus {
+  box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.3), 0 0 16px -4px rgba(0, 212, 255, 0.15) !important;
+  outline: none;
+}
+
+/* Sidebar: tighter, darker, more HUD */
+.hud-panel {
+  border-color: var(--color-border);
+  background: linear-gradient(160deg, rgba(5, 14, 28, 0.95), rgba(3, 9, 20, 0.98));
+}
+.hud-panel:hover {
+  border-color: rgba(0, 212, 255, 0.22);
+  box-shadow: 0 0 20px -8px rgba(0, 212, 255, 0.15);
+}
+
+/* JARVIS text flicker on key elements */
+.jarvis-flicker {
+  animation: jarvis-flicker 6s ease-in-out infinite;
+}
+
+/* Accent glowing border bottom for sections */
+.jarvis-section-head {
+  position: relative;
+  padding-bottom: 8px;
+  margin-bottom: 12px;
+}
+.jarvis-section-head::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--color-accent), rgba(0, 212, 255, 0.1), transparent);
+}
+
+/* Chat message glow for assistant */
+.message-assistant {
+  border-left: 2px solid rgba(0, 212, 255, 0.18);
+  padding-left: 12px;
+}
+
+/* User bubble: subtle cyan tint */
+.message-user {
+  background: rgba(0, 212, 255, 0.07);
+  border: 1px solid rgba(0, 212, 255, 0.12);
+}
+
+/* Send button glow */
+button[title="Send"]:not(:disabled),
+button[aria-label="Send"]:not(:disabled) {
+  box-shadow: 0 0 12px rgba(0, 212, 255, 0.3);
+}
+
+/* Scrollbar — thin cyan tint */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 212, 255, 0.15);
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 212, 255, 0.3); }
+
+/* Selection highlight */
+::selection {
+  background-color: rgba(0, 212, 255, 0.25);
+  color: #fff;
+}
+
 /*
  * OpenJarvis design tokens.
  * Zinc/slate neutrals, blue accent. Light default, dark via class or system pref.
@@ -174,6 +443,7 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
+    background: transparent;
   }
 
   body {

@@ -14,6 +14,7 @@ import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
 import { OptInModal } from './components/OptInModal';
+import { useWakeWord } from './hooks/useWakeWord';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -59,7 +60,11 @@ export default function App() {
     fetchModels()
       .then((m) => {
         setModels(m);
-        if (!selectedModel && m.length > 0) setSelectedModel(m[0].id);
+        const ids = new Set(m.map((x) => x.id));
+        // Reset selection if the persisted model is no longer available
+        if (!selectedModel || !ids.has(selectedModel)) {
+          if (m.length > 0) setSelectedModel(m[0].id);
+        }
       })
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
@@ -117,6 +122,9 @@ export default function App() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
+
+  const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
+  useWakeWord(setupDone && speechEnabled);
 
   // Global keyboard shortcuts
   useEffect(() => {
