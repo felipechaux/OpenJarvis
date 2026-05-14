@@ -55,6 +55,7 @@ def _load_keys() -> dict[str, str]:
         "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY",
         "MINIMAX_API_KEY",
+        "NVIDIA_API_KEY",
     ):
         val = os.environ.get(name)
         if val:
@@ -72,6 +73,8 @@ def get_provider(model: str) -> str | None:
         return "google"
     if any(model.startswith(p) for p in _MINIMAX_PREFIXES):
         return "minimax"
+    if model.startswith("nvidia/"):
+        return "nvidia"
     if any(model.startswith(org) for org in _LOCAL_HF_ORGS):
         return None  # local model, never route to cloud
     if "/" in model:  # openrouter format: "meta-llama/llama-3-8b"
@@ -370,8 +373,9 @@ async def stream_cloud(
             raise ValueError(
                 "OPENROUTER_API_KEY not set — add it in the Cloud Models tab"
             )
+        real_model = model[11:] if model.startswith("openrouter/") else model
         async for token in _stream_openai(
-            model,
+            real_model,
             messages,
             temperature,
             max_tokens,
@@ -392,6 +396,22 @@ async def stream_cloud(
             max_tokens,
             base_url="https://api.minimax.io/v1",
             api_key_name="MINIMAX_API_KEY",
+        ):
+            yield token
+
+    elif provider == "nvidia":
+        keys = _load_keys()
+        api_key = keys.get("NVIDIA_API_KEY", "")
+        if not api_key:
+            raise ValueError("NVIDIA_API_KEY not set — add it in the Cloud Models tab")
+        real_model = model[7:] if model.startswith("nvidia/") else model
+        async for token in _stream_openai(
+            real_model,
+            messages,
+            temperature,
+            max_tokens,
+            base_url="https://integrate.api.nvidia.com/v1",
+            api_key_name="NVIDIA_API_KEY",
         ):
             yield token
 

@@ -6,6 +6,7 @@ import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useTTS } from '../../hooks/useTTS';
+import { WAKE_EVENT } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 export function InputArea() {
@@ -66,6 +67,17 @@ export function InputArea() {
     : !speechAvailable ? 'no-backend'
     : streamState.isStreaming ? 'streaming'
     : undefined;
+
+  // Start mic automatically when wake word is detected
+  useEffect(() => {
+    const onWake = () => {
+      if (!micDisabled && speechState === 'idle') {
+        startRecording();
+      }
+    };
+    window.addEventListener(WAKE_EVENT, onWake);
+    return () => window.removeEventListener(WAKE_EVENT, onWake);
+  }, [micDisabled, speechState, startRecording]);
 
   // Track if we should auto-send after transcription
   const autoSendAfterTranscriptionRef = useRef(false);
@@ -191,10 +203,20 @@ export function InputArea() {
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);
+            // Defensive normalisation: the backend sends a JSON string, but
+            // an older build sent the raw dict — passing that through to
+            // ToolCallCard's <pre> crashes React with
+            // "Objects are not valid as a React child".
+            const argsAsString =
+              typeof data.arguments === 'string'
+                ? data.arguments
+                : data.arguments == null
+                  ? ''
+                  : JSON.stringify(data.arguments);
             const tc: ToolCallInfo = {
               id: generateId(),
               tool: data.tool,
-              arguments: data.arguments || '',
+              arguments: argsAsString,
               status: 'running',
             };
             toolCalls.push(tc);
@@ -205,7 +227,7 @@ export function InputArea() {
             updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
             useAppStore.getState().addLogEntry({
               timestamp: Date.now(), level: 'info', category: 'tool',
-              message: `Calling ${data.tool}(${data.arguments || ''})`,
+              message: `Calling ${data.tool}(${argsAsString})`,
             });
           } catch {}
         } else if (eventName === 'tool_call_end') {

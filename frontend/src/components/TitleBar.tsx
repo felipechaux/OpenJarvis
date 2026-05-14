@@ -10,23 +10,41 @@ export function TitleBar() {
   }, []);
 
   const close = async () => {
+    console.log('Close clicked');
     if (!isTauri()) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().close();
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      // On macOS, it's common to hide the main window instead of closing it 
+      // to keep background services running.
+      await win.hide();
+    } catch (err) {
+      console.error('Failed to hide window:', err);
+    }
   };
 
   const minimize = async () => {
+    console.log('Minimize clicked');
     if (!isTauri()) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().minimize();
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      await getCurrentWindow().minimize();
+    } catch (err) {
+      console.error('Failed to minimize window:', err);
+    }
   };
 
   const maximize = async () => {
+    console.log('Maximize clicked');
     if (!isTauri()) return;
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    const win = getCurrentWindow();
-    if (await win.isMaximized()) win.unmaximize();
-    else win.maximize();
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      if (await win.isMaximized()) await win.unmaximize();
+      else await win.maximize();
+    } catch (err) {
+      console.error('Failed to maximize window:', err);
+    }
   };
 
   const hh = String(time.getHours()).padStart(2, '0');
@@ -35,30 +53,51 @@ export function TitleBar() {
 
   return (
     <div
-      className="titlebar flex items-center justify-between shrink-0 select-none"
-      data-tauri-drag-region
+      className="titlebar flex items-center justify-between shrink-0 select-none relative"
       style={{
         height: 38,
         padding: '0 12px',
         background: 'rgba(2, 6, 14, 0.92)',
         borderBottom: '1px solid var(--color-border)',
+        zIndex: 50,
       }}
     >
+      {/* Separate drag region that doesn't overlap the interactive buttons */}
+      <div 
+        data-tauri-drag-region 
+        className="absolute inset-0 z-0"
+        style={{ pointerEvents: 'auto' }}
+      />
+
       {/* Left: window controls (Tauri only) or spacer */}
       {isTauri() ? (
-        <div className="flex items-center gap-1.5 z-10" style={{ minWidth: 56 }}>
-          <button onClick={close} className="jarvis-wbtn" style={{ background: '#ff5f57' }} title="Close" />
-          <button onClick={minimize} className="jarvis-wbtn" style={{ background: '#febc2e' }} title="Minimize" />
-          <button onClick={maximize} className="jarvis-wbtn" style={{ background: '#28c840' }} title="Maximize" />
+        <div className="flex items-center gap-1.5 z-10 relative" style={{ minWidth: 56 }}>
+          <button 
+            onClick={(e) => { e.stopPropagation(); close(); }} 
+            className="jarvis-wbtn" 
+            style={{ background: '#ff5f57' }} 
+            title="Close" 
+          />
+          <button 
+            onClick={(e) => { e.stopPropagation(); minimize(); }} 
+            className="jarvis-wbtn" 
+            style={{ background: '#febc2e' }} 
+            title="Minimize" 
+          />
+          <button 
+            onClick={(e) => { e.stopPropagation(); maximize(); }} 
+            className="jarvis-wbtn" 
+            style={{ background: '#28c840' }} 
+            title="Maximize" 
+          />
         </div>
       ) : (
-        <div style={{ minWidth: 56 }} />
+        <div className="z-10 relative" style={{ minWidth: 56 }} />
       )}
 
       {/* Center: branding — drag region */}
       <div
-        className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2.5"
-        data-tauri-drag-region
+        className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2.5 z-10"
         style={{ pointerEvents: 'none' }}
       >
         {/* Mini arc reactor */}
@@ -97,7 +136,7 @@ export function TitleBar() {
       </div>
 
       {/* Right: clock */}
-      <div style={{
+      <div className="z-10 relative" style={{
         fontFamily: 'var(--font-hud)',
         fontSize: '0.65rem',
         color: 'var(--color-text-tertiary)',

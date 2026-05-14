@@ -66,6 +66,23 @@ class QueryOrchestrator:
             detected = self._detect_agent_intent(query)
             if detected:
                 use_agent = detected
+
+        # For greetings and schedule/inbox queries: pre-fetch live data and
+        # inject it as verified facts in the system prompt so the LLM cannot
+        # hallucinate calendar events or emails that don't exist.
+        if system_prompt is None and self._is_live_context_query(query):
+            live_data = self._fetch_live_context()
+            if live_data:
+                base_prompt = getattr(s.config.agent, "default_system_prompt", "") or ""
+                system_prompt = (
+                    f"{base_prompt}\n\n"
+                    "## VERIFIED LIVE DATA — fetched moments ago\n"
+                    "Reference ONLY what appears in this section. "
+                    "Never invent emails, calendar events, senders, or subjects "
+                    "that are not listed here. If a section is empty, skip it.\n\n"
+                    f"{live_data}"
+                ).strip()
+
         if use_agent and use_agent != "none":
             return self._run_agent(
                 query,
@@ -92,14 +109,53 @@ class QueryOrchestrator:
             "engine": s.engine_key,
         }
 
+    _LIVE_CONTEXT_RE = None  # compiled lazily
+
+    @classmethod
+    def _is_live_context_query(cls, query: str) -> bool:
+        """Return True if the query is a greeting or asks about schedule/inbox."""
+        import re
+
+        if cls._LIVE_CONTEXT_RE is None:
+            cls._LIVE_CONTEXT_RE = re.compile(
+                r"\b(good\s+morning|good\s+afternoon|good\s+evening|good\s+day"
+                r"|hey\s+jarvis|hi\s+jarvis|hello\s+jarvis"
+                r"|what'?s\s+on\s+(my\s+)?(agenda|schedule|calendar)"
+                r"|what\s+(do\s+i\s+have\s+today|emails?\s+(do\s+i\s+have|today))"
+                r")\b"
+                r"|^\s*(hi|hello|hey|sup|hiya|howdy|good\s+morning)\s*[!.]*\s*$",
+                re.IGNORECASE,
+            )
+        return bool(cls._LIVE_CONTEXT_RE.search(query))
+
+    def _fetch_live_context(self) -> str:
+        """Run digest_collect against gmail+gcalendar and return formatted text."""
+        try:
+            import openjarvis.connectors  # ensure all connectors are registered  # noqa: F401
+            from openjarvis.tools.digest_collect import DigestCollectTool
+
+            tool = DigestCollectTool()
+            result = tool.execute(sources=["gmail", "gcalendar"], hours_back=24)
+            if result.success:
+                return result.content.strip()
+        except Exception as exc:
+            logger.warning("Failed to fetch live context: %s", exc)
+        return ""
+
     def _detect_agent_intent(self, query: str) -> Optional[str]:
-        """Detect if a query should be routed to a specific agent."""
+        """Detect if a query should be routed to a specific agent.
+
+        Only explicit full-briefing requests go to morning_digest.
+        Simple greetings stay on the default agent so the orchestrator's
+        live-data injection (system prompt) takes effect — morning_digest
+        builds its own prompt and ignores it.
+        """
         import re
 
         from openjarvis.core.registry import AgentRegistry
 
         if re.search(
-            r"\b(good\s+morning|morning\s+digest|daily\s+briefing|morning\s+briefing)\b",
+            r"\b(morning\s+digest|daily\s+briefing|morning\s+briefing|full\s+briefing)\b",
             query,
             re.IGNORECASE,
         ):

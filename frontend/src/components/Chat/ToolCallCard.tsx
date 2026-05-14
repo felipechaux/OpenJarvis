@@ -12,10 +12,28 @@ const statusConfig = {
   error: { icon: XCircle, color: 'var(--color-error)' },
 };
 
-function previewArgs(raw: string): string {
-  if (!raw) return '';
+// Coerce the ``arguments`` field to a string regardless of shape.
+//
+// Persisted conversations from older builds stored ``arguments`` as a raw
+// object (``{query: "..."}``) because the backend was emitting a Python dict.
+// React crashes with "Objects are not valid as a React child" the moment any
+// such object reaches a JSX expression below, so we normalise at every entry
+// point instead of trusting the type signature.
+function argsToString(raw: unknown): string {
+  if (raw == null) return '';
+  if (typeof raw === 'string') return raw;
   try {
-    const parsed = JSON.parse(raw);
+    return JSON.stringify(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
+function previewArgs(raw: unknown): string {
+  const str = argsToString(raw);
+  if (!str) return '';
+  try {
+    const parsed = JSON.parse(str);
     if (parsed && typeof parsed === 'object') {
       const entries = Object.entries(parsed);
       if (entries.length === 0) return '';
@@ -28,14 +46,15 @@ function previewArgs(raw: string): string {
   } catch {
     /* fall through */
   }
-  return raw.length > 60 ? `${raw.slice(0, 60)}…` : raw;
+  return str.length > 60 ? `${str.slice(0, 60)}…` : str;
 }
 
 export function ToolCallCard({ toolCall }: Props) {
   const [expanded, setExpanded] = useState(false);
   const config = statusConfig[toolCall.status];
   const StatusIcon = config.icon;
-  const preview = previewArgs(toolCall.arguments);
+  const argsStr = argsToString(toolCall.arguments);
+  const preview = previewArgs(argsStr);
 
   return (
     <div
@@ -95,7 +114,7 @@ export function ToolCallCard({ toolCall }: Props) {
           className="px-2.5 pb-2 pt-0.5"
           style={{ borderTop: '1px solid var(--color-border-subtle, var(--color-border))' }}
         >
-          {toolCall.arguments && (
+          {argsStr && (
             <div className="mt-1.5">
               <div
                 style={{
@@ -120,7 +139,7 @@ export function ToolCallCard({ toolCall }: Props) {
                   wordBreak: 'break-all',
                 }}
               >
-                {formatJson(toolCall.arguments)}
+                {formatJson(argsStr)}
               </pre>
             </div>
           )}
@@ -149,7 +168,7 @@ export function ToolCallCard({ toolCall }: Props) {
                   wordBreak: 'break-word',
                 }}
               >
-                {toolCall.result}
+                {argsToString(toolCall.result)}
               </pre>
             </div>
           )}

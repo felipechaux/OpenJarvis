@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
@@ -23,6 +25,8 @@ from openjarvis.server.models import (
     StreamChoice,
     UsageInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -205,11 +209,20 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
 
     if request_body.stream:
         bus = getattr(request.app.state, "bus", None)
-        # Use the agent stream bridge only when tools are present (the
-        # bridge runs agent.run() synchronously and word-splits the result,
-        # so it can't stream tokens in real-time).  For plain chat, stream
-        # directly from the engine for true token-by-token output.
-        if agent is not None and bus is not None and request_body.tools:
+        # Route through the agent stream bridge whenever the server-side
+        # agent has its own tools (so e.g. knowledge_search runs even though
+        # the client doesn't pass tools in the request body). The bridge
+        # runs agent.run() synchronously and word-splits the result, which
+        # sacrifices true token-by-token streaming — accepted tradeoff to
+        # keep tool calls working in the desktop app.
+        agent_has_tools = agent is not None and bool(
+            getattr(agent, "_tools", None)
+        )
+        if (
+            agent is not None
+            and bus is not None
+            and (request_body.tools or agent_has_tools)
+        ):
             return await _handle_agent_stream(agent, bus, model, request_body)
         return await _handle_stream(engine, model, request_body, complexity_info)
 
@@ -507,6 +520,40 @@ async def _handle_stream(
     )
 
 
+_NVIDIA_MODELS_CACHE: dict[str, Any] = {"ids": [], "fetched_at": 0.0}
+_NVIDIA_MODELS_TTL = 600  # seconds
+
+
+async def _fetch_nvidia_models(api_key: str) -> list[str]:
+    """Fetch NVIDIA's available models from the OpenAI-compatible /models endpoint.
+
+    Cached in-process for _NVIDIA_MODELS_TTL seconds. Returns prefixed IDs
+    (``nvidia/<model>``) so they route correctly through cloud_router. Returns
+    an empty list on failure so the caller can fall back to a hardcoded list.
+    """
+    now = time.time()
+    if (
+        _NVIDIA_MODELS_CACHE["ids"]
+        and now - _NVIDIA_MODELS_CACHE["fetched_at"] < _NVIDIA_MODELS_TTL
+    ):
+        return list(_NVIDIA_MODELS_CACHE["ids"])
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(
+                "https://integrate.api.nvidia.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", [])
+            ids = sorted({f"nvidia/{m['id']}" for m in data if m.get("id")})
+            _NVIDIA_MODELS_CACHE["ids"] = ids
+            _NVIDIA_MODELS_CACHE["fetched_at"] = now
+            return list(ids)
+    except Exception as exc:
+        logger.warning("Failed to fetch NVIDIA model list: %s", exc)
+        return []
+
+
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelListResponse:
     """List available models: local (Ollama) + cloud models for any set API keys."""
@@ -544,9 +591,20 @@ async def list_models(request: Request) -> ModelListResponse:
             "openrouter/deepseek/deepseek-r1",
         ])
 
-    # Put openrouter/auto first so the UI selects it by default
-    priority = [m for m in cloud_ids if m == "openrouter/auto"]
-    rest_cloud = [m for m in cloud_ids if m != "openrouter/auto"]
+    if keys.get("NVIDIA_API_KEY"):
+        nvidia_ids = await _fetch_nvidia_models(keys["NVIDIA_API_KEY"])
+        if not nvidia_ids:
+            nvidia_ids = [
+                "nvidia/nemotron-4-340b-instruct",
+                "nvidia/nemotron-4-340b-base",
+                "nvidia/nemotron-4-mini",
+            ]
+        cloud_ids.extend(nvidia_ids)
+
+    # Put the configured default model first so the UI selects it by default.
+    default_model = getattr(request.app.state, "model", "") or "claude-sonnet-4-6"
+    priority = [m for m in cloud_ids if m == default_model]
+    rest_cloud = [m for m in cloud_ids if m != default_model]
     all_model_ids = priority + rest_cloud + local_ids
     return ModelListResponse(
         data=[ModelObject(id=mid) for mid in all_model_ids],

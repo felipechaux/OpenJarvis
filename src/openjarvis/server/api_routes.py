@@ -823,6 +823,71 @@ async def tts_voices(request: Request):
     return {"voices": tts.available_voices()}
 
 
+@speech_router.post("/wake-word/detect")
+async def detect_wake_word(request: Request):
+    """Fast wake-word detection using a tiny Whisper model.
+
+    Accepts the same multipart ``file`` field as /transcribe but uses a
+    dedicated tiny model instance so it doesn't block the main STT backend.
+    Returns ``{"detected": bool, "text": str}``.
+    """
+    import asyncio
+    import tempfile
+
+    # Lazy-init a tiny model stored on app state (loaded once, reused)
+    model = getattr(request.app.state, "_wake_word_model", None)
+    if model is None:
+        try:
+            from faster_whisper import WhisperModel
+
+            def _load():
+                return WhisperModel("tiny", device="auto", compute_type="int8")
+
+            loop = asyncio.get_event_loop()
+            model = await loop.run_in_executor(None, _load)
+            request.app.state._wake_word_model = model
+        except Exception as exc:
+            logger.warning("Wake word model unavailable: %s", exc)
+            return {"detected": False, "text": ""}
+
+    form = await request.form()
+    audio_file = form.get("file")
+    if audio_file is None:
+        return {"detected": False, "text": ""}
+
+    audio_bytes = await audio_file.read()
+    if len(audio_bytes) < 500:
+        return {"detected": False, "text": ""}
+
+    filename = getattr(audio_file, "filename", "wake.webm")
+    suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".webm"
+
+    def _transcribe():
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
+            tmp.write(audio_bytes)
+            tmp.flush()
+            segs, _ = model.transcribe(
+                tmp.name,
+                language="en",
+                beam_size=1,
+                best_of=1,
+                condition_on_previous_text=False,
+            )
+            return "".join(s.text for s in segs).strip().lower()
+
+    try:
+        loop = asyncio.get_event_loop()
+        text = await loop.run_in_executor(None, _transcribe)
+        wake_phrases = ["jarvis", "hi jarvis", "hey jarvis", "hello jarvis"]
+        detected = any(p in text for p in wake_phrases)
+        if detected:
+            logger.info("Wake word detected: '%s'", text)
+        return {"detected": detected, "text": text}
+    except Exception as exc:
+        logger.warning("Wake word detection error: %s", exc)
+        return {"detected": False, "text": ""}
+
+
 # ---- Feedback routes ----
 
 feedback_router = APIRouter(prefix="/v1/feedback", tags=["feedback"])

@@ -220,11 +220,18 @@ class ToolExecutor:
                     success=False,
                 )
 
-        # Emit start event
+        # Emit start event.  ``arguments`` is JSON-serialised to a string so
+        # downstream SSE consumers (the chat UI) receive a stable string type
+        # — passing a dict here would surface in React as
+        # ``Objects are not valid as a React child``.
         if self._bus:
+            try:
+                arguments_str = json.dumps(params, default=str)
+            except Exception:  # noqa: BLE001
+                arguments_str = str(params)
             self._bus.publish(
                 EventType.TOOL_CALL_START,
-                {"tool": tool_call.name, "arguments": params},
+                {"tool": tool_call.name, "arguments": arguments_str},
             )
 
         # Execute with timeout
