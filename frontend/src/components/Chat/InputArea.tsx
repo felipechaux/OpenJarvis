@@ -203,10 +203,20 @@ export function InputArea() {
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);
+            // Defensive normalisation: the backend sends a JSON string, but
+            // an older build sent the raw dict — passing that through to
+            // ToolCallCard's <pre> crashes React with
+            // "Objects are not valid as a React child".
+            const argsAsString =
+              typeof data.arguments === 'string'
+                ? data.arguments
+                : data.arguments == null
+                  ? ''
+                  : JSON.stringify(data.arguments);
             const tc: ToolCallInfo = {
               id: generateId(),
               tool: data.tool,
-              arguments: data.arguments || '',
+              arguments: argsAsString,
               status: 'running',
             };
             toolCalls.push(tc);
@@ -217,7 +227,7 @@ export function InputArea() {
             updateLastAssistant(convId, accumulatedContent, [...toolCalls]);
             useAppStore.getState().addLogEntry({
               timestamp: Date.now(), level: 'info', category: 'tool',
-              message: `Calling ${data.tool}(${data.arguments || ''})`,
+              message: `Calling ${data.tool}(${argsAsString})`,
             });
           } catch {}
         } else if (eventName === 'tool_call_end') {

@@ -16,6 +16,21 @@ function cleanForSpeech(text: string): string {
     .replace(/`[^`]+`/g, '')
     .replace(/\*\*?([^*]+)\*\*?/g, '$1')
     .replace(/#{1,6}\s/g, '')
+    // Horizontal rules / heading underlines — "===", "---", "***", "___".
+    // These get read literally by TTS as "equals equals equals" etc.
+    .replace(/^\s*[=\-*_]{3,}\s*$/gm, '')
+    // Bullet markers at the start of a line (•, *, -, +, ·) — keep the text,
+    // drop the marker so the speaker doesn't say "asterisk" or pause oddly.
+    .replace(/^[\s]*[•·*+\-]\s+/gm, '')
+    // Numbered list prefixes like "1. " or "12) ".
+    .replace(/^\s*\d+[.)]\s+/gm, '')
+    // Markdown links [text](url) → text (drop the URL).
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Blockquote markers ">" at the start of a line.
+    .replace(/^\s*>\s+/gm, '')
+    // Collapse any remaining sequences of decorative chars TTS would vocalise.
+    .replace(/[=]{2,}/g, '')
+    .replace(/\s{2,}/g, ' ')
     .replace(ABBREVS, '$1') // strip periods from abbreviations so TTS doesn't pause
     .trim();
 }

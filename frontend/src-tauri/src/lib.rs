@@ -12,6 +12,31 @@ const JARVIS_PORT: u16 = 8000;
 /// Fallback model when the user config has no model set.
 const DEFAULT_MODEL: &str = "openrouter/auto";
 
+/// Extract a TOML string value from the right-hand side of `key = "value"`.
+///
+/// Strips any inline `# comment` suffix before unquoting so values like
+/// `default_agent = "native_react"  # comment` are read as `native_react`,
+/// not `native_react"        # comment` (which then gets forwarded as
+/// ``--agent`` and silently disables tool routing).
+fn parse_toml_string_value(raw: &str) -> String {
+    // Drop inline comments — only those that appear OUTSIDE the quoted value.
+    let mut in_string = false;
+    let mut end = raw.len();
+    for (i, c) in raw.char_indices() {
+        if c == '"' {
+            in_string = !in_string;
+        } else if c == '#' && !in_string {
+            end = i;
+            break;
+        }
+    }
+    raw[..end]
+        .trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .to_string()
+}
+
 /// Read `default_model` from ~/.openjarvis/config.toml, falling back to DEFAULT_MODEL.
 fn model_from_config() -> String {
     let home = home_dir();
@@ -21,7 +46,7 @@ fn model_from_config() -> String {
             let trimmed = line.trim();
             if trimmed.starts_with("default_model") {
                 if let Some(val) = trimmed.split('=').nth(1) {
-                    let model = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                    let model = parse_toml_string_value(val);
                     if !model.is_empty() {
                         return model;
                     }
@@ -41,7 +66,7 @@ fn agent_from_config() -> String {
             let trimmed = line.trim();
             if trimmed.starts_with("default_agent") {
                 if let Some(val) = trimmed.split('=').nth(1) {
-                    let agent = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                    let agent = parse_toml_string_value(val);
                     if !agent.is_empty() {
                         return agent;
                     }
