@@ -872,14 +872,31 @@ async def detect_wake_word(request: Request):
                 beam_size=1,
                 best_of=1,
                 condition_on_previous_text=False,
+                # Bias the LM toward the wake word — the tiny model otherwise
+                # transcribes "Jarvis" as "Jervis" / "Javis" / "drivers" /
+                # "Travis", which the substring matcher below silently drops.
+                initial_prompt=(
+                    "The user is talking to an AI assistant named Jarvis. "
+                    "They may say 'Jarvis', 'hey Jarvis', 'hi Jarvis', "
+                    "or 'hello Jarvis' to get its attention."
+                ),
             )
             return "".join(s.text for s in segs).strip().lower()
+
+    # Common mishearings the tiny Whisper model produces for "Jarvis".
+    # Note: we intentionally exclude near-homophones that are also common
+    # English words ("travis", "drivers") to keep false positives low.
+    WAKE_TOKENS = ("jarvis", "jervis", "javis", "jarvey", "jarvi")
+
+    def _matches(text: str) -> bool:
+        # Word-boundary-ish match so "tarjeeves" / "harvester" don't trip it.
+        padded = f" {text} "
+        return any(f" {tok}" in padded for tok in WAKE_TOKENS)
 
     try:
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(None, _transcribe)
-        wake_phrases = ["jarvis", "hi jarvis", "hey jarvis", "hello jarvis"]
-        detected = any(p in text for p in wake_phrases)
+        detected = _matches(text)
         if detected:
             logger.info("Wake word detected: '%s'", text)
         return {"detected": detected, "text": text}

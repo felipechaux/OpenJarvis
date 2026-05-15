@@ -55,19 +55,46 @@ export default function App() {
     return () => clearInterval(interval);
   }, [importOverlay]);
 
-  // Fetch models on mount
+  // Fetch models on mount, retrying until the backend is reachable.
+  //
+  // When Tauri spawns the Python backend it can take 10–30 s for
+  // ``jarvis serve`` to install deps + import + open the port.  The previous
+  // single-shot fetch failed in that window, set ``models=[]``, and never
+  // retried — leaving the command palette stuck on "No models available"
+  // even after the backend came up.  Retry on a backoff and stop once we get
+  // a non-empty list.
   useEffect(() => {
-    fetchModels()
-      .then((m) => {
-        setModels(m);
-        const ids = new Set(m.map((x) => x.id));
-        // Reset selection if the persisted model is no longer available
-        if (!selectedModel || !ids.has(selectedModel)) {
-          if (m.length > 0) setSelectedModel(m[0].id);
+    let cancelled = false;
+    let attempt = 0;
+
+    const tryFetch = async () => {
+      while (!cancelled) {
+        try {
+          const m = await fetchModels();
+          if (cancelled) return;
+          if (m.length > 0) {
+            setModels(m);
+            const ids = new Set(m.map((x) => x.id));
+            if (!selectedModel || !ids.has(selectedModel)) {
+              setSelectedModel(m[0].id);
+            }
+            setModelsLoading(false);
+            return;
+          }
+        } catch {
+          // backend not ready yet — fall through and retry
         }
-      })
-      .catch(() => setModels([]))
-      .finally(() => setModelsLoading(false));
+        attempt += 1;
+        // 1s, 2s, 4s, capped at 8s for steady polling.
+        const delay = Math.min(8000, 1000 * 2 ** Math.min(attempt - 1, 3));
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    };
+
+    tryFetch();
+    return () => {
+      cancelled = true;
+    };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch server info

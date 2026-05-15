@@ -9,17 +9,112 @@ use tokio::sync::Mutex;
 const OLLAMA_PORT: u16 = 11434;
 const JARVIS_PORT: u16 = 8000;
 
-/// Fallback model when the user config has no model set.
-const DEFAULT_MODEL: &str = "openrouter/auto";
+/// Small, fast model pulled at startup so the app opens quickly.
+const STARTUP_MODEL: &str = "qwen3.5:4b";
+
+/// Tiny fallback model if even the startup model can't be pulled.
+const FALLBACK_MODEL: &str = "qwen3:0.6b";
+
+/// Qwen3.5 model variants, ordered smallest to largest.
+/// Each entry is (ollama_tag, approximate_download_size_gb, min_ram_gb).
+const QWEN35_MODELS: &[(&str, f64, f64)] = &[
+    ("qwen3.5:0.8b", 1.0, 4.0),
+    ("qwen3.5:2b", 2.7, 6.0),
+    ("qwen3.5:4b", 3.4, 8.0),
+    ("qwen3.5:9b", 6.6, 12.0),
+    ("qwen3.5:27b", 17.0, 24.0),
+    ("qwen3.5:35b", 24.0, 32.0),
+    ("qwen3.5:122b", 81.0, 96.0),
+];
+
+/// Get total system RAM in GB.
+fn total_ram_gb() -> f64 {
+    #[cfg(target_os = "macos")]
+    {
+        use std::process::Command;
+        if let Ok(output) = Command::new("sysctl").args(["-n", "hw.memsize"]).output() {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                if let Ok(bytes) = s.trim().parse::<u64>() {
+                    return bytes as f64 / (1024.0 * 1024.0 * 1024.0);
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/proc/meminfo") {
+            for line in contents.lines() {
+                if line.starts_with("MemTotal:") {
+                    if let Some(kb_str) = line.split_whitespace().nth(1) {
+                        if let Ok(kb) = kb_str.parse::<u64>() {
+                            return kb as f64 / (1024.0 * 1024.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        // wmic returns TotalVisibleMemorySize in KB
+        if let Ok(output) = Command::new("wmic")
+            .args(["OS", "get", "TotalVisibleMemorySize", "/value"])
+            .output()
+        {
+            if let Ok(s) = String::from_utf8(output.stdout) {
+                for line in s.lines() {
+                    if let Some(val) = line.strip_prefix("TotalVisibleMemorySize=") {
+                        if let Ok(kb) = val.trim().parse::<u64>() {
+                            return kb as f64 / (1024.0 * 1024.0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    8.0
+}
+
+/// Return the list of Qwen3.5 models that fit on this machine, smallest first.
+fn models_that_fit() -> Vec<&'static str> {
+    let ram = total_ram_gb();
+    QWEN35_MODELS
+        .iter()
+        .filter(|(_, _, min_ram)| ram >= *min_ram)
+        .map(|(tag, _, _)| *tag)
+        .collect()
+}
+
+/// Pick the default model — prefers STARTUP_MODEL if it fits, otherwise
+/// falls back to the third-largest model that fits on this machine.
+fn preferred_model() -> &'static str {
+    let fitting = models_that_fit();
+    // Prefer STARTUP_MODEL when it fits (fast, good quality)
+    if fitting.contains(&STARTUP_MODEL) {
+        return STARTUP_MODEL;
+    }
+    match fitting.len() {
+        0 => FALLBACK_MODEL,
+        1 => fitting[0],
+        2 => fitting[0],
+        n => fitting[n - 3], // third-largest
+    }
+}
+
+/// Get the user home directory, handling both Unix (HOME) and Windows (USERPROFILE).
+fn home_dir() -> String {
+    std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default()
+}
 
 /// Extract a TOML string value from the right-hand side of `key = "value"`.
 ///
-/// Strips any inline `# comment` suffix before unquoting so values like
-/// `default_agent = "native_react"  # comment` are read as `native_react`,
-/// not `native_react"        # comment` (which then gets forwarded as
-/// ``--agent`` and silently disables tool routing).
+/// Strips any inline `# comment` suffix outside the quoted region before
+/// unquoting so values like `default_model = "openrouter/x" # comment` parse
+/// as `openrouter/x` rather than the full line including the comment.
 fn parse_toml_string_value(raw: &str) -> String {
-    // Drop inline comments — only those that appear OUTSIDE the quoted value.
     let mut in_string = false;
     let mut end = raw.len();
     for (i, c) in raw.char_indices() {
@@ -37,51 +132,46 @@ fn parse_toml_string_value(raw: &str) -> String {
         .to_string()
 }
 
-/// Read `default_model` from ~/.openjarvis/config.toml, falling back to DEFAULT_MODEL.
+/// Read ``default_model`` from ``~/.openjarvis/config.toml``.
+///
+/// Empty string when the file or key is missing — callers fall back to the
+/// Ollama startup model in that case.
 fn model_from_config() -> String {
-    let home = home_dir();
-    let config_path = format!("{home}/.openjarvis/config.toml");
-    if let Ok(text) = std::fs::read_to_string(&config_path) {
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("default_model") {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    let model = parse_toml_string_value(val);
-                    if !model.is_empty() {
-                        return model;
-                    }
-                }
-            }
-        }
-    }
-    DEFAULT_MODEL.to_string()
+    read_toml_key("default_model")
 }
 
-/// Read `default_agent` from ~/.openjarvis/config.toml, falling back to "native_react".
+/// Read ``default_agent`` from ``~/.openjarvis/config.toml``.
+///
+/// Defaults to ``"simple"`` so existing behaviour is preserved when no
+/// override is set.  The desktop config typically sets ``native_react``.
 fn agent_from_config() -> String {
-    let home = home_dir();
-    let config_path = format!("{home}/.openjarvis/config.toml");
-    if let Ok(text) = std::fs::read_to_string(&config_path) {
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("default_agent") {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    let agent = parse_toml_string_value(val);
-                    if !agent.is_empty() {
-                        return agent;
-                    }
+    let v = read_toml_key("default_agent");
+    if v.is_empty() {
+        "simple".to_string()
+    } else {
+        v
+    }
+}
+
+/// Scan ``~/.openjarvis/config.toml`` for ``key = "value"`` and return the
+/// unquoted, comment-stripped value (empty string when missing).
+fn read_toml_key(key: &str) -> String {
+    let path = format!("{}/.openjarvis/config.toml", home_dir());
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return String::new();
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(key) {
+            if let Some(val) = trimmed.split('=').nth(1) {
+                let v = parse_toml_string_value(val);
+                if !v.is_empty() {
+                    return v;
                 }
             }
         }
     }
-    "native_react".to_string()
-}
-
-/// Get the user home directory, handling both Unix (HOME) and Windows (USERPROFILE).
-fn home_dir() -> String {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default()
+    String::new()
 }
 
 /// Resolve full path to a binary by checking common locations.
@@ -270,6 +360,11 @@ impl ChildHandle {
 struct BackendManager {
     ollama: Option<ChildHandle>,
     jarvis: Option<ChildHandle>,
+    /// True once the JarvisWake sidecar has been launched via Launch
+    /// Services.  We don't hold a ``ChildHandle`` for it because ``open
+    /// -a`` returns immediately after kicking off the .app — the sidecar
+    /// process itself is detached.  On shutdown we ``pkill`` it by name.
+    wake_launched: bool,
 }
 
 impl BackendManager {
@@ -282,6 +377,15 @@ impl BackendManager {
             h.kill().await;
         }
         self.ollama = None;
+        if self.wake_launched {
+            // The sidecar was launched detached (so TCC attributes the
+            // privacy request to its .app bundle).  Reap it explicitly.
+            let _ = tokio::process::Command::new("pkill")
+                .args(["-f", "JarvisWake.app/Contents/MacOS/JarvisWake"])
+                .status()
+                .await;
+            self.wake_launched = false;
+        }
     }
 }
 
@@ -362,7 +466,6 @@ async fn ollama_has_model(model: &str) -> bool {
     false
 }
 
-
 async fn pull_model(model: &str) -> Result<(), String> {
     let url = format!("http://127.0.0.1:{}/api/pull", OLLAMA_PORT);
     let client = reqwest::Client::builder()
@@ -385,38 +488,114 @@ async fn pull_model(model: &str) -> Result<(), String> {
 // Backend boot sequence (runs in background after app launch)
 // ---------------------------------------------------------------------------
 
-/// Return true if ~/.openjarvis/cloud-keys.env has at least one API key set.
+/// Return ``true`` when the configured ``default_model`` points at a cloud
+/// provider rather than Ollama, so the boot path can skip the local engine
+/// entirely (no startup model download, no ollama serve sidecar).
+fn is_cloud_model(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    // Provider-prefixed (openrouter/, openai/, anthropic/) always have a slash.
+    if m.contains('/') {
+        return true;
+    }
+    // Well-known cloud model name patterns without a slash prefix.
+    m.starts_with("gpt-")
+        || m.starts_with("claude-")
+        || m.starts_with("o1-")
+        || m.starts_with("o3-")
+        || m.starts_with("gemini-")
+        || m.starts_with("chatgpt-")
+}
 
 async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
-    // Phase 1: Ensure Ollama is running (for local models).
-    // We don't pull any specific model — the user manages their own local models.
-    {
+    let resolved_model = model_from_config();
+    let cloud_only = is_cloud_model(&resolved_model);
+
+    if cloud_only {
+        // Cloud model — skip Ollama bootstrap entirely.  Downloading a 3+ GB
+        // Qwen weight just to ignore it (because chat traffic flows to
+        // OpenRouter / OpenAI / Anthropic / Gemini) wastes bandwidth, disk,
+        // and minutes on every cold start.
         let mut s = status.lock().await;
-        s.phase = "ollama".into();
-        s.detail = "Starting inference engine...".into();
-    }
-
-    let ollama_bin = resolve_bin("ollama");
-    let sidecar = tokio::process::Command::new(&ollama_bin)
-        .arg("serve")
-        .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT))
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    if let Ok(child) = sidecar {
-        backend.lock().await.ollama = Some(ChildHandle { child });
-    }
-
-    // Wait up to 10 s for Ollama — it's optional, cloud still works without it.
-    let ollama_url = format!("http://127.0.0.1:{}/api/tags", OLLAMA_PORT);
-    let _ = wait_for_url(&ollama_url, Duration::from_secs(10)).await;
-
-    {
-        let mut s = status.lock().await;
+        s.phase = "server".into();
+        s.detail = format!("Using cloud model {resolved_model}; skipping Ollama.");
         s.ollama_ready = true;
         s.model_ready = true;
-        s.phase = "server".into();
-        s.detail = "Starting API server...".into();
+    } else {
+        // Phase 1: Start Ollama
+        {
+            let mut s = status.lock().await;
+            s.phase = "ollama".into();
+            s.detail = "Starting inference engine...".into();
+        }
+
+        // Try the bundled sidecar first, fall back to system ollama
+        let ollama_child = {
+            let ollama_bin = resolve_bin("ollama");
+            let sidecar = tokio::process::Command::new(&ollama_bin)
+                .arg("serve")
+                .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            match sidecar {
+                Ok(child) => Some(child),
+                Err(_) => None,
+            }
+        };
+
+        if let Some(child) = ollama_child {
+            backend.lock().await.ollama = Some(ChildHandle { child });
+        }
+
+        let ollama_url = format!("http://127.0.0.1:{}/api/tags", OLLAMA_PORT);
+        let ollama_ok = wait_for_url(&ollama_url, Duration::from_secs(30)).await;
+
+        if !ollama_ok {
+            let mut s = status.lock().await;
+            s.error = Some("Could not start Ollama. Install it from https://ollama.com".into());
+            return;
+        }
+
+        {
+            let mut s = status.lock().await;
+            s.ollama_ready = true;
+            s.detail = "Inference engine ready.".into();
+        }
+
+        // Phase 2: Pull one small model (qwen3.5:2b) so the app can open fast.
+        // Remaining models are pulled in the background after the server starts.
+        {
+            let mut s = status.lock().await;
+            s.phase = "model".into();
+            s.detail = format!("Checking for {}...", STARTUP_MODEL);
+        }
+
+        if !ollama_has_model(STARTUP_MODEL).await {
+            {
+                let mut s = status.lock().await;
+                s.detail = format!("Downloading {}... (this may take a minute)", STARTUP_MODEL);
+            }
+            if let Err(e) = pull_model(STARTUP_MODEL).await {
+                // If the startup model fails, try the tiny fallback
+                eprintln!("Warning: failed to pull {}: {}", STARTUP_MODEL, e);
+                if !ollama_has_model(FALLBACK_MODEL).await {
+                    let mut s = status.lock().await;
+                    s.detail = format!("Downloading {}...", FALLBACK_MODEL);
+                    drop(s);
+                    if let Err(e2) = pull_model(FALLBACK_MODEL).await {
+                        let mut s = status.lock().await;
+                        s.error = Some(format!("Failed to download model: {}", e2));
+                        return;
+                    }
+                }
+            }
+        }
+
+        {
+            let mut s = status.lock().await;
+            s.model_ready = true;
+            s.detail = "Model ready.".into();
+        }
     }
 
     // Phase 3: Start jarvis serve
@@ -564,6 +743,23 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         }
     }
 
+    // When the configured ``default_model`` is a cloud model, forward it
+    // verbatim to ``jarvis serve --model`` so chat traffic flows to OpenRouter
+    // / OpenAI / Anthropic / Gemini.  Otherwise probe Ollama for an available
+    // local model.
+    let startup_model: String = if cloud_only {
+        resolved_model.clone()
+    } else {
+        let pref = preferred_model();
+        if ollama_has_model(pref).await {
+            pref.to_string()
+        } else if ollama_has_model(STARTUP_MODEL).await {
+            STARTUP_MODEL.to_string()
+        } else {
+            FALLBACK_MODEL.to_string()
+        }
+    };
+
     let root = project_root.as_ref().unwrap();
 
     // Install dependencies automatically (handles fresh clones)
@@ -577,7 +773,6 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             "--extra", "server",
             "--extra", "inference-cloud",
             "--extra", "inference-google",
-            "--extra", "speech",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -587,23 +782,29 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
 
     {
         let mut s = status.lock().await;
-        s.detail = format!("Starting server with {} from {}...", DEFAULT_MODEL, root.display());
+        s.detail = format!(
+            "Starting server with {} from {}...",
+            startup_model,
+            root.display(),
+        );
     }
 
-    let resolved_model = model_from_config();
     let resolved_agent = agent_from_config();
-
     let mut cmd = tokio::process::Command::new(&uv_bin);
     cmd.args([
         "run",
         "jarvis",
         "serve",
+        // Bind loopback only.  Without ``--host`` the auth middleware
+        // requires ``OPENJARVIS_API_KEY`` (because it would otherwise expose
+        // the API on 0.0.0.0).  The desktop app is a local-only client, so
+        // 127.0.0.1 is both safer and avoids the auth gate.
         "--host",
         "127.0.0.1",
         "--port",
         &JARVIS_PORT.to_string(),
         "--model",
-        &resolved_model,
+        &startup_model,
         "--agent",
         &resolved_agent,
     ])
@@ -675,6 +876,21 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         s.detail = "All systems ready.".into();
     }
 
+    // Phase 4: Pull remaining Qwen3.5 models in the background — only when
+    // running against a local Ollama engine.  Cloud-model setups never use
+    // these weights so downloading them would just burn disk.
+    if !cloud_only {
+        let fitting = models_that_fit();
+        tokio::spawn(async move {
+            for model in fitting {
+                if model != STARTUP_MODEL && model != FALLBACK_MODEL {
+                    if !ollama_has_model(model).await {
+                        let _ = pull_model(model).await;
+                    }
+                }
+            }
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -695,14 +911,222 @@ fn get_api_base() -> String {
     api_base()
 }
 
+/// Path to the bundled JarvisWake Swift sidecar executable.
+///
+/// The sidecar lives inside ``JarvisWake.app/Contents/MacOS/JarvisWake``
+/// (rather than as a bare binary) because macOS TCC only reads
+/// ``NSMicrophoneUsageDescription`` / ``NSSpeechRecognitionUsageDescription``
+/// from a real ``.app`` bundle's adjacent Info.plist — embedding the plist
+/// in the binary's ``__TEXT,__info_plist`` section crashes with a missing-
+/// usage-description error at first speech-framework call.
+///
+/// We probe the packaged Tauri bundle first so production runs never
+/// accidentally fall through to the dev workspace path.
+#[cfg(target_os = "macos")]
+fn wake_binary_path() -> Option<std::path::PathBuf> {
+    const REL_BUNDLE: &str = "JarvisWake.app/Contents/MacOS/JarvisWake";
+
+    // 1. Packaged Tauri .app: ``Contents/MacOS/JarvisWake.app`` or
+    //    ``Contents/Resources/binaries/JarvisWake.app`` (depending on layout).
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(macos_dir) = exe.parent() {
+            let candidates: Vec<std::path::PathBuf> = [
+                Some(macos_dir.join(REL_BUNDLE)),
+                macos_dir
+                    .parent()
+                    .map(|p| p.join("Resources/binaries").join(REL_BUNDLE)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            for candidate in candidates {
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    // 2. Dev: frontend/src-tauri/binaries/JarvisWake.app
+    if let Some(root) = find_project_root() {
+        let p = root
+            .join("frontend/src-tauri/binaries")
+            .join(REL_BUNDLE);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // 3. CARGO_MANIFEST_DIR fallback (cargo run from src-tauri/).
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let p = std::path::PathBuf::from(manifest)
+        .join("binaries")
+        .join(REL_BUNDLE);
+    if p.exists() {
+        return Some(p);
+    }
+    None
+}
+
+/// Spawn the JarvisWake Swift binary and forward its ``wake`` events to
+/// the webview via Tauri's event system.  The frontend subscribes to
+/// ``"jarvis-wake"`` and reacts (e.g. focuses the window, starts the mic).
+#[cfg(target_os = "macos")]
+async fn spawn_wake_listener(app: tauri::AppHandle, backend: SharedBackend) {
+    use tauri::Emitter;
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    // Idempotency guard: the setup hook spawns this once on launch, and the
+    // ``start_backend`` command can also spawn it.  Don't double up.
+    if backend.lock().await.wake_launched {
+        return;
+    }
+
+    let bin = match wake_binary_path() {
+        Some(p) => p,
+        None => {
+            eprintln!("[wake] jarvis-wake binary not found; wake-word disabled");
+            let _ = app.emit("jarvis-wake-error", "sidecar binary not found");
+            return;
+        }
+    };
+
+    // Walk up from ``.../JarvisWake.app/Contents/MacOS/JarvisWake`` to the
+    // ``JarvisWake.app`` bundle directory.  Launching the binary directly
+    // works fine but TCC then attributes the Speech / Microphone privacy
+    // request to the *parent* (our Tauri dev binary, which has no usage
+    // descriptions) and aborts the child with SIGABRT.  ``open -a`` goes
+    // through Launch Services so TCC attributes the request to the
+    // sidecar's own .app bundle and reads its Info.plist properly.
+    let bundle = match bin.ancestors().nth(3) {
+        Some(p) => p.to_path_buf(),
+        None => {
+            eprintln!("[wake] cannot derive bundle path from {}", bin.display());
+            let _ = app.emit("jarvis-wake-error", "bundle path lookup failed");
+            return;
+        }
+    };
+
+    // Redirect the sidecar's stdout to a temp log file we can tail.  ``open``
+    // doesn't pipe stdout back to its caller, so we use its ``--stdout``
+    // flag (macOS 14+) to point /dev/stdout at a path.
+    let log_path = std::env::temp_dir().join(format!(
+        "jarvis-wake-{}.log",
+        std::process::id()
+    ));
+    // Ensure the file exists and is empty so our reader starts fresh
+    let _ = std::fs::remove_file(&log_path);
+    if let Err(e) = std::fs::File::create(&log_path) {
+        eprintln!("[wake] cannot create log file {}: {}", log_path.display(), e);
+        let _ = app.emit("jarvis-wake-error", "log create failed");
+        return;
+    }
+
+    let status = tokio::process::Command::new("open")
+        .arg("-a")
+        .arg(&bundle)
+        .arg("--stdout")
+        .arg(&log_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .await;
+    match status {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("[wake] `open -a` exited with status {}", s);
+            let _ = app.emit("jarvis-wake-error", "launch services failed");
+            return;
+        }
+        Err(e) => {
+            eprintln!("[wake] failed to invoke `open`: {}", e);
+            let _ = app.emit("jarvis-wake-error", "open command failed");
+            return;
+        }
+    }
+
+    backend.lock().await.wake_launched = true;
+    eprintln!("[wake] sidecar launched, tailing {}", log_path.display());
+
+    // Tail the log file: reopen + seek-to-last-pos each tick so we always
+    // see freshly-appended bytes.  Tokio's ``File`` caches EOF state after
+    // ``read_to_string`` returns 0, which breaks the more obvious "open
+    // once, read in a loop" pattern.  Reopening dodges the issue at the
+    // cost of one extra syscall per 150 ms — negligible.
+    let mut last_pos: u64 = 0;
+    let mut leftover = String::new();
+    loop {
+        let bytes = match tokio::fs::read(&log_path).await {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("[wake] log read error: {}", e);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
+        };
+        let size = bytes.len() as u64;
+        if size < last_pos {
+            // File got truncated (rare — usually means the sidecar
+            // was restarted out-of-band).  Reset and re-read from 0.
+            last_pos = 0;
+            leftover.clear();
+        }
+        if size > last_pos {
+            let new_slice = &bytes[last_pos as usize..];
+            last_pos = size;
+            if let Ok(s) = std::str::from_utf8(new_slice) {
+                leftover.push_str(s);
+                while let Some(i) = leftover.find('\n') {
+                    let line: String = leftover.drain(..=i).collect();
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let parsed: serde_json::Value = match serde_json::from_str(line) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let event = parsed.get("event").and_then(|v| v.as_str()).unwrap_or("");
+                    match event {
+                        "wake" => {
+                            let text = parsed.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                            eprintln!("[wake] forwarding wake event to JS: {}", text);
+                            let _ = app.emit("jarvis-wake", text);
+                        }
+                        "ready" => {
+                            eprintln!("[wake] sidecar ready");
+                            let _ = app.emit("jarvis-wake-ready", true);
+                        }
+                        "error" => {
+                            let msg = parsed
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("(unknown)");
+                            eprintln!("[wake] sidecar error: {}", msg);
+                            let _ = app.emit("jarvis-wake-error", msg);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
 #[tauri::command]
 async fn start_backend(
+    app: tauri::AppHandle,
     backend: tauri::State<'_, SharedBackend>,
     status: tauri::State<'_, SharedStatus>,
 ) -> Result<(), String> {
     let b = backend.inner().clone();
     let s = status.inner().clone();
-    tauri::async_runtime::spawn(boot_backend(b, s));
+    tauri::async_runtime::spawn(boot_backend(b.clone(), s));
+    #[cfg(target_os = "macos")]
+    tauri::async_runtime::spawn(spawn_wake_listener(app, b));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app; // unused on non-macOS
+    }
     Ok(())
 }
 
@@ -1505,6 +1929,8 @@ pub fn run() {
 
     let boot_backend_ref = backend.clone();
     let boot_status_ref = status.clone();
+    #[cfg(target_os = "macos")]
+    let wake_backend_ref = backend.clone();
 
     tauri::Builder::default()
         .manage(backend.clone())
@@ -1551,7 +1977,6 @@ pub fn run() {
                                 let _ = window.hide();
                             } else {
                                 let _ = window.show();
-                                let _ = window.unminimize();
                                 let _ = window.set_focus();
                             }
                         }
@@ -1561,19 +1986,7 @@ pub fn run() {
                     }
                     _ => {}
                 })
-                .on_tray_icon_event(|tray, event| {
-                    // Double-click the tray icon to show the window
-                    if let tauri::tray::TrayIconEvent::DoubleClick { .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.unminimize();
-                            let _ = window.set_focus();
-                        }
-                    }
-                })
                 .build(app)?;
-
 
             // Create native macOS overlay panel
             #[cfg(target_os = "macos")]
@@ -1601,6 +2014,18 @@ pub fn run() {
 
             // Auto-start backend services on launch
             tauri::async_runtime::spawn(boot_backend(boot_backend_ref, boot_status_ref));
+
+            // Auto-start the macOS wake-word sidecar.  Previously this was
+            // only spawned from the ``start_backend`` command, but the
+            // frontend never invokes that command — it relies on the
+            // ``setup`` hook's auto-boot path above.  Without this spawn the
+            // JS ``useWakeWord`` hook listens for ``jarvis-wake`` events
+            // forever and the wake word silently never fires.
+            #[cfg(target_os = "macos")]
+            {
+                let app_handle = app.handle().clone();
+                tauri::async_runtime::spawn(spawn_wake_listener(app_handle, wake_backend_ref));
+            }
 
             Ok(())
         })
@@ -1635,27 +2060,12 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building OpenJarvis Desktop")
-        .run(move |app, event| {
-            match event {
-                // Hide the window instead of quitting when the user clicks the red X,
-                // so the wake word listener keeps running in the background.
-                tauri::RunEvent::WindowEvent {
-                    label,
-                    event: tauri::WindowEvent::CloseRequested { api, .. },
-                    ..
-                } if label == "main" => {
-                    api.prevent_close();
-                    if let Some(w) = app.get_webview_window("main") {
-                        let _ = w.hide();
-                    }
-                }
-                tauri::RunEvent::ExitRequested { .. } => {
-                    let b = backend.clone();
-                    tauri::async_runtime::spawn(async move {
-                        b.lock().await.stop_all().await;
-                    });
-                }
-                _ => {}
+        .run(move |_app, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                let b = backend.clone();
+                tauri::async_runtime::spawn(async move {
+                    b.lock().await.stop_all().await;
+                });
             }
         });
 }

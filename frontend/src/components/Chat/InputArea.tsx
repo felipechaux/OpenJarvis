@@ -68,12 +68,23 @@ export function InputArea() {
     : streamState.isStreaming ? 'streaming'
     : undefined;
 
-  // Start mic automatically when wake word is detected
+  // Start mic automatically when wake word is detected.  Uses VAD-based
+  // auto-stop so the user can speak their command and the message is
+  // submitted as soon as they stop talking — no second click needed.
   useEffect(() => {
     const onWake = () => {
-      if (!micDisabled && speechState === 'idle') {
-        startRecording();
-      }
+      if (micDisabled || speechState !== 'idle') return;
+      startRecording({
+        autoStop: true,
+        onAutoResult: (text) => {
+          if (!text) return;
+          setInput((prev) => {
+            const next = prev ? prev + ' ' + text : text;
+            autoSendAfterTranscriptionRef.current = true;
+            return next;
+          });
+        },
+      });
     };
     window.addEventListener(WAKE_EVENT, onWake);
     return () => window.removeEventListener(WAKE_EVENT, onWake);

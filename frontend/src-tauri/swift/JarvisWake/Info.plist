@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>JarvisWake</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.openjarvis.desktop.wake</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>OpenJarvis listens for the "Jarvis" wake word.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>OpenJarvis uses on-device speech recognition to detect the "Jarvis" wake word.</string>
+</dict>
+</plist>

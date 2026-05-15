@@ -114,8 +114,14 @@ def serve(
     sec = setup_security(config, engine, bus)
     engine = sec.engine
 
-    # If cloud API keys are set, wrap with MultiEngine so both local
-    # and cloud models appear in the model list and can be used.
+    # Wrap with MultiEngine so both local and cloud models appear in the
+    # model list and can be selected at request time.  Both directions need
+    # the wrap:
+    #   - local primary + cloud keys: add cloud as secondary
+    #   - cloud primary + reachable Ollama: add ollama as secondary so users
+    #     can still pick a model they pulled locally (without this branch the
+    #     chat endpoint routed every request to the cloud engine and 404'd on
+    #     local-only tags like ``qwen3.5:4b``).
     _has_cloud = (
         os.environ.get("OPENAI_API_KEY")
         or os.environ.get("ANTHROPIC_API_KEY")
@@ -141,6 +147,21 @@ def serve(
                 )
         except Exception as exc:
             logger.debug("Cloud engine init failed: %s", exc)
+    elif engine_name == "cloud":
+        # Cloud is primary — try to attach Ollama as a secondary engine so
+        # locally-installed models remain selectable from the desktop UI.
+        try:
+            from openjarvis.core.registry import EngineRegistry
+            from openjarvis.engine.multi import MultiEngine
+
+            ollama_cls = EngineRegistry.get("ollama")
+            ollama = ollama_cls()
+            if ollama.health():
+                engine = MultiEngine([("cloud", engine), ("ollama", ollama)])
+                engine_name = "multi"
+                console.print("  Local:  [cyan]ollama[/cyan] attached as secondary")
+        except Exception as exc:
+            logger.debug("Ollama secondary attach failed: %s", exc)
 
     # Wrap engine with InstrumentedEngine for telemetry recording
     try:
