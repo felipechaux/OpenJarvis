@@ -773,6 +773,11 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             "--extra", "server",
             "--extra", "inference-cloud",
             "--extra", "inference-google",
+            // Speech (faster-whisper) — without this the STT backend
+            // imports faster_whisper as None and /v1/speech/health reports
+            // ``available: false``, leaving the UI stuck on "Backend not
+            // configured" even with the rest of the wake-word stack wired.
+            "--extra", "speech",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())

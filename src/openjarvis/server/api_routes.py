@@ -868,7 +868,11 @@ async def detect_wake_word(request: Request):
             tmp.flush()
             segs, _ = model.transcribe(
                 tmp.name,
-                language="en",
+                # Auto-detect language so bilingual ES/EN speakers aren't
+                # forced into English transcription (which would mangle
+                # "Jarvis" pronounced with a Spanish accent into
+                # "yarvis"/"jarbis" with even worse confidence than letting
+                # Whisper pick es).
                 beam_size=1,
                 best_of=1,
                 condition_on_previous_text=False,
@@ -877,16 +881,23 @@ async def detect_wake_word(request: Request):
                 # "Travis", which the substring matcher below silently drops.
                 initial_prompt=(
                     "The user is talking to an AI assistant named Jarvis. "
-                    "They may say 'Jarvis', 'hey Jarvis', 'hi Jarvis', "
-                    "or 'hello Jarvis' to get its attention."
+                    "They may speak English or Spanish and say 'Jarvis', "
+                    "'hey Jarvis', 'hi Jarvis', 'hello Jarvis', "
+                    "'oye Jarvis', 'hola Jarvis', or 'ey Jarvis' "
+                    "to get its attention."
                 ),
             )
             return "".join(s.text for s in segs).strip().lower()
 
-    # Common mishearings the tiny Whisper model produces for "Jarvis".
-    # Note: we intentionally exclude near-homophones that are also common
-    # English words ("travis", "drivers") to keep false positives low.
-    WAKE_TOKENS = ("jarvis", "jervis", "javis", "jarvey", "jarvi")
+    # Common mishearings the tiny Whisper model produces for "Jarvis" across
+    # English and Spanish accents.  Excluded: near-homophones that are also
+    # common words ("travis", "drivers") to keep false positives low.
+    WAKE_TOKENS = (
+        "jarvis", "jervis", "javis", "jarvey", "jarvi",
+        # Spanish-accent mishearings
+        "yarvis", "yarbis", "jarbis", "harvis", "charvis",
+        "yarvi", "harvi", "jarvys", "jarvees",
+    )
 
     def _matches(text: str) -> bool:
         # Word-boundary-ish match so "tarjeeves" / "harvester" don't trip it.

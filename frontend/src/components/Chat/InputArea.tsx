@@ -74,6 +74,11 @@ export function InputArea() {
   useEffect(() => {
     const onWake = () => {
       if (micDisabled || speechState !== 'idle') return;
+      // Kill any in-flight TTS playback first.  Without this, audio from
+      // a previous assistant turn bleeds back into the mic via the
+      // speakers, the VAD sees that as continuous speech, and the silence
+      // timer never advances → mic stays open forever.
+      stopSpeaking();
       startRecording({
         autoStop: true,
         onAutoResult: (text) => {
@@ -88,7 +93,7 @@ export function InputArea() {
     };
     window.addEventListener(WAKE_EVENT, onWake);
     return () => window.removeEventListener(WAKE_EVENT, onWake);
-  }, [micDisabled, speechState, startRecording]);
+  }, [micDisabled, speechState, startRecording, stopSpeaking]);
 
   // Track if we should auto-send after transcription
   const autoSendAfterTranscriptionRef = useRef(false);

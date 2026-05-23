@@ -25,11 +25,35 @@ import Speech
 
 // MARK: - Tunables
 
+/// Locales we try to arm in parallel.  Each successful recognizer listens
+/// to the same mic stream — either language can fire the wake.  This is
+/// critical for bilingual users: Apple Speech in en-US misses "Jarvis"
+/// pronounced with a Spanish accent (and vice versa for es-ES on English
+/// commands), so we run both and trust whichever transcript matches first.
+private let kLocales: [String] = ["es-ES", "en-US", "es-MX"]
+
+/// Wake phrases in both languages.  Lowercased; whole-word matched.
 private let kWakePhrases: [String] = [
+    // English
     "jarvis",
     "hi jarvis",
     "hey jarvis",
     "hello jarvis",
+    // Spanish
+    "oye jarvis",
+    "hola jarvis",
+    "ey jarvis",
+    "che jarvis",
+]
+
+/// Common mishearings of "jarvis" the recognizers produce when the speaker
+/// has a non-native accent or background noise.  Treated as wake matches
+/// even when no canonical phrase appears.  Excluded: real English words
+/// ("travis", "drivers") that would cause constant false positives.
+private let kFuzzyWakeTokens: [String] = [
+    "jarvis", "jervis", "javis", "jarvey", "jarvi",
+    "yarvis", "yarbis", "jarbis", "harvis", "charvis",
+    "yarvi", "harvi", "jharvis", "jarvys", "jarvees",
 ]
 
 /// Restart recognition before SFSpeechRecognitionTask hits its internal
@@ -60,10 +84,13 @@ private func emitError(_ message: String) {
 
 /// Returns the first wake phrase found in ``text``, or nil if none match.
 /// Matches whole-word boundaries so "drivers" / "Travis" never trigger.
+/// Also accepts common mishearings of "jarvis" (yarvis, jarbis, harvis…)
+/// so a non-native accent doesn't have to fight the recognizer.
 private func matchedWakePhrase(in text: String) -> String? {
     let lowered = text.lowercased()
+    let padded = " \(lowered) "
+
     for phrase in kWakePhrases {
-        let padded = " \(lowered) "
         let needle = " \(phrase) "
         if padded.contains(needle) {
             return phrase
@@ -73,38 +100,82 @@ private func matchedWakePhrase(in text: String) -> String? {
             return phrase
         }
     }
+
+    // Fuzzy single-token match — catches "yarvis", "jarbis", "harvis", etc.
+    for tok in kFuzzyWakeTokens {
+        let needle = " \(tok) "
+        if padded.contains(needle) {
+            return tok
+        }
+        if lowered.hasPrefix("\(tok) ") || lowered.hasPrefix("\(tok),")
+            || lowered == tok {
+            return tok
+        }
+    }
     return nil
 }
 
 // MARK: - WakeListener
 
+/// Tracks one SFSpeechRecognizer + its current in-flight request/task.
+/// We hold one of these per locale so multiple languages can listen to the
+/// same audio stream simultaneously.  ``fileprivate`` so ``WakeListener``'s
+/// init can take ``[RecognizerSlot]`` without leaking it to other files.
+fileprivate final class RecognizerSlot {
+    let locale: String
+    let recognizer: SFSpeechRecognizer
+    var request: SFSpeechAudioBufferRecognitionRequest?
+    var task: SFSpeechRecognitionTask?
+
+    init(locale: String, recognizer: SFSpeechRecognizer) {
+        self.locale = locale
+        self.recognizer = recognizer
+    }
+}
+
 final class WakeListener: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
     private let captureSession = AVCaptureSession()
     private let audioOutput = AVCaptureAudioDataOutput()
     private let audioQueue = DispatchQueue(label: "com.openjarvis.wake.audio")
-    private let recognizer: SFSpeechRecognizer
+    private let slots: [RecognizerSlot]
 
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
     private var segmentTimer: DispatchSourceTimer?
-
     private var lastWake: Date = .distantPast
 
-    init(recognizer: SFSpeechRecognizer) {
-        self.recognizer = recognizer
+    fileprivate init(slots: [RecognizerSlot]) {
+        self.slots = slots
         super.init()
     }
 
+    /// Build a recognizer for every locale in ``kLocales`` that's actually
+    /// available on this Mac and supports on-device recognition.  We need
+    /// at least one to succeed — otherwise the sidecar emits an error and
+    /// the JS fallback (Whisper polling) takes over.
     static func makeOrEmit() -> WakeListener? {
-        guard let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US")) else {
-            emitError("SFSpeechRecognizer unavailable for en-US")
+        var slots: [RecognizerSlot] = []
+        for locale in kLocales {
+            guard let rec = SFSpeechRecognizer(locale: Locale(identifier: locale)) else {
+                FileHandle.standardError.write(
+                    Data("[wake] SFSpeechRecognizer unavailable for \(locale)\n".utf8)
+                )
+                continue
+            }
+            // On-device is required: it's the only way we get a continuous,
+            // privacy-preserving recognition session.  Cloud mode is rate-
+            // limited and ships audio to Apple — both are unacceptable here.
+            if !rec.supportsOnDeviceRecognition {
+                FileHandle.standardError.write(
+                    Data("[wake] on-device recognition unsupported for \(locale)\n".utf8)
+                )
+                continue
+            }
+            slots.append(RecognizerSlot(locale: locale, recognizer: rec))
+        }
+        if slots.isEmpty {
+            emitError("No locales available with on-device speech recognition")
             return nil
         }
-        if !recognizer.supportsOnDeviceRecognition {
-            emitError("On-device recognition not supported on this Mac")
-            return nil
-        }
-        return WakeListener(recognizer: recognizer)
+        return WakeListener(slots: slots)
     }
 
     /// Wait for both speech-recognition and microphone authorisation,
@@ -179,7 +250,12 @@ final class WakeListener: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
             return
         }
 
-        emit(["event": "ready", "device": device.localizedName])
+        let localeList = slots.map { $0.locale }.joined(separator: ",")
+        emit([
+            "event": "ready",
+            "device": device.localizedName,
+            "locales": localeList,
+        ])
         startSegment()
     }
 
@@ -194,41 +270,54 @@ final class WakeListener: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
         // mono/multi-channel + sample-rate conversion internally — much more
         // robust than feeding AVAudioPCMBuffer that the recogniser silently
         // ignores when the channel count doesn't match its expectations.
-        request?.appendAudioSampleBuffer(sampleBuffer)
+        // Fan out the same buffer to every active recognizer so each
+        // language can transcribe it in parallel.
+        for slot in slots {
+            slot.request?.appendAudioSampleBuffer(sampleBuffer)
+        }
     }
 
     // MARK: - Segment lifecycle
 
-    /// Arm a fresh recognition request.  Called once at startup and again
-    /// every ``kSegmentSeconds`` so we don't trip SFSpeechRecognitionTask's
-    /// internal duration cap.
+    /// Arm a fresh recognition request on every active slot.  Called once
+    /// at startup and again every ``kSegmentSeconds`` so we don't trip
+    /// SFSpeechRecognitionTask's internal duration cap.  A wake event in
+    /// any slot fires the shared cooldown so we don't double-emit when both
+    /// en-US and es-ES transcribe the same utterance.
     private func startSegment() {
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        req.requiresOnDeviceRecognition = true
-        // contextualStrings biases the language model toward our wake words.
-        req.contextualStrings = kWakePhrases
-        self.request = req
+        for slot in slots {
+            let req = SFSpeechAudioBufferRecognitionRequest()
+            req.shouldReportPartialResults = true
+            req.requiresOnDeviceRecognition = true
+            // contextualStrings biases the language model toward our wake
+            // words.  Apple Speech in es-ES otherwise hears "Yarbis" /
+            // "Charbi" instead of "Jarvis", and en-US hears "Travis".
+            req.contextualStrings = kWakePhrases + kFuzzyWakeTokens
+            slot.request = req
 
-        task = recognizer.recognitionTask(with: req) { [weak self] result, error in
-            guard let self = self else { return }
-            if let result = result {
-                let text = result.bestTranscription.formattedString
-                if let phrase = matchedWakePhrase(in: text) {
-                    let now = Date()
-                    if now.timeIntervalSince(self.lastWake) >= kCooldownSeconds {
-                        self.lastWake = now
-                        emit([
-                            "event": "wake",
-                            "phrase": phrase,
-                            "text": text,
-                        ])
-                        self.rotateSegment()
+            let locale = slot.locale
+            slot.task = slot.recognizer.recognitionTask(with: req) {
+                [weak self] result, error in
+                guard let self = self else { return }
+                if let result = result {
+                    let text = result.bestTranscription.formattedString
+                    if let phrase = matchedWakePhrase(in: text) {
+                        let now = Date()
+                        if now.timeIntervalSince(self.lastWake) >= kCooldownSeconds {
+                            self.lastWake = now
+                            emit([
+                                "event": "wake",
+                                "phrase": phrase,
+                                "text": text,
+                                "locale": locale,
+                            ])
+                            self.rotateSegment()
+                        }
                     }
                 }
-            }
-            if error != nil {
-                self.rotateSegmentIfActive()
+                if error != nil {
+                    self.rotateSegmentIfActive()
+                }
             }
         }
 
@@ -242,17 +331,19 @@ final class WakeListener: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate
     private func rotateSegment() {
         segmentTimer?.cancel()
         segmentTimer = nil
-        request?.endAudio()
-        task?.cancel()
-        request = nil
-        task = nil
+        for slot in slots {
+            slot.request?.endAudio()
+            slot.task?.cancel()
+            slot.request = nil
+            slot.task = nil
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.startSegment()
         }
     }
 
     private func rotateSegmentIfActive() {
-        if request != nil {
+        if slots.contains(where: { $0.request != nil }) {
             rotateSegment()
         }
     }

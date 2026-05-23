@@ -20,6 +20,16 @@ class FasterWhisperBackend(SpeechBackend):
 
     backend_id = "faster-whisper"
 
+    # General-purpose prompt that biases Whisper toward an assistant-style
+    # bilingual dictation context.  Hands the model a hint about the speaker
+    # and the wake word so it doesn't transcribe "Jarvis" as "Jervis" /
+    # "Travis", and it understands ES/EN code-switching.
+    _DEFAULT_PROMPT = (
+        "The user is dictating commands or questions to an AI assistant "
+        "named Jarvis. They speak both English and Spanish and may switch "
+        "between them mid-sentence."
+    )
+
     def __init__(
         self,
         model_size: str = "base",
@@ -30,6 +40,23 @@ class FasterWhisperBackend(SpeechBackend):
         self._device = device
         self._compute_type = compute_type
         self._model: Optional[WhisperModel] = None
+        # Pre-warm the model in a background thread.  ``large-v3-turbo``
+        # takes ~5-15s to load into RAM the first time after the server
+        # starts; without pre-warming the first wake-word→transcribe
+        # round-trip eats that latency and the user sees the spinner sit
+        # for "way too long."  We fire-and-forget here because failures
+        # are surfaced again when ``_ensure_model`` is called by the
+        # first real transcribe request.
+        if WhisperModel is not None:
+            import threading
+
+            def _prewarm() -> None:
+                try:
+                    self._ensure_model()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_prewarm, daemon=True, name="whisper-prewarm").start()
 
     def _ensure_model(self) -> WhisperModel:
         """Lazy-load the Whisper model on first use."""
@@ -72,7 +99,29 @@ class FasterWhisperBackend(SpeechBackend):
             tmp.write(audio)
             tmp.flush()
 
-            kwargs = {}
+            # Latency-tuned decoding parameters for interactive voice use.
+            # The wake-word UX needs responses in ~1-2s end-to-end; the
+            # earlier "SuperWhisper-style" settings (beam_size=5, best_of=5,
+            # six-step temperature fallback chain) traded ~5-10x more
+            # decoding work for marginal quality gains, which made the
+            # transcribing-spinner sit for 10-30s and felt like the mic
+            # never stopped listening.
+            #
+            # Greedy decoding on large-v3-turbo is already very accurate
+            # (the "turbo" model is purpose-built for low-latency runs),
+            # and ``vad_filter`` + the bilingual ``initial_prompt`` keep
+            # the main hallucination sources (silence, ES/EN code-switch)
+            # under control without the extra beam search cost.
+            kwargs = {
+                "beam_size": 1,
+                "best_of": 1,
+                "temperature": 0.0,
+                "condition_on_previous_text": False,
+                "no_speech_threshold": 0.6,
+                "vad_filter": True,
+                "vad_parameters": {"min_silence_duration_ms": 500},
+                "initial_prompt": self._DEFAULT_PROMPT,
+            }
             if language:
                 kwargs["language"] = language
 
