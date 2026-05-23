@@ -3,6 +3,11 @@ import { getBase, isTauri } from '../lib/api';
 
 const CHUNK_MS = 2500;
 const WAKE_EVENT = 'jarvis-wake';
+// Broadcast by the wake handler so any in-flight stream (greeting, normal
+// chat) can abort itself before the mic opens.  Without this, the morning
+// greeting keeps streamState.isStreaming=true through its slow tool calls,
+// which blocks the wake handler from ever opening the mic.
+const INTERRUPT_EVENT = 'jarvis-interrupt';
 const NATIVE_READY_TIMEOUT_MS = 5000;
 
 /// Subscribe to the native macOS wake-word sidecar.  Resolves to ``null``
@@ -196,4 +201,4 @@ export function useWakeWord(enabled: boolean) {
   }, [enabled, start, stop]);
 }
 
-export { WAKE_EVENT };
+export { WAKE_EVENT, INTERRUPT_EVENT };

@@ -4,6 +4,7 @@ import { SystemPanel } from '../components/Chat/SystemPanel';
 import { useAppStore, generateId } from '../lib/store';
 import { streamChat } from '../lib/sse';
 import { useTTS } from '../hooks/useTTS';
+import { INTERRUPT_EVENT } from '../hooks/useWakeWord';
 
 // Module-level flag: survives StrictMode remounts, resets only on full page reload
 let _greetingComplete = false;
@@ -39,6 +40,19 @@ export function ChatPage() {
     if (_greetingComplete || !selectedModel) return;
 
     const controller = new AbortController();
+
+    // The wake word fires INTERRUPT_EVENT when the user says "Jarvis"
+    // mid-greeting.  Abort the stream + kill TTS so we don't keep paying
+    // for tool calls the user already cut off, and so the briefing audio
+    // doesn't keep playing over their command.
+    const onInterrupt = () => {
+      if (controller.signal.aborted) return;
+      _greetingComplete = true;
+      controller.abort();
+      stopSpeaking();
+      resetStream();
+    };
+    window.addEventListener(INTERRUPT_EVENT, onInterrupt);
 
     async function triggerGreeting() {
       setGreeted(true);
@@ -143,6 +157,7 @@ ABSOLUTE RULES:
     triggerGreeting();
 
     return () => {
+      window.removeEventListener(INTERRUPT_EVENT, onInterrupt);
       controller.abort();
       stopSpeaking();
       resetStream();

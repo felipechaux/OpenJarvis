@@ -6,7 +6,7 @@ import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useTTS } from '../../hooks/useTTS';
-import { WAKE_EVENT } from '../../hooks/useWakeWord';
+import { WAKE_EVENT, INTERRUPT_EVENT } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 export function InputArea() {
@@ -73,12 +73,28 @@ export function InputArea() {
   // submitted as soon as they stop talking — no second click needed.
   useEffect(() => {
     const onWake = () => {
-      if (micDisabled || speechState !== 'idle') return;
-      // Kill any in-flight TTS playback first.  Without this, audio from
-      // a previous assistant turn bleeds back into the mic via the
-      // speakers, the VAD sees that as continuous speech, and the silence
-      // timer never advances → mic stays open forever.
+      if (!speechEnabled || !speechAvailable) return;
+      if (speechState !== 'idle') return;
+
+      // Interrupt anything currently in flight.  Two streams can be active:
+      //   - The morning greeting (owned by ChatPage) → broadcast INTERRUPT_EVENT
+      //   - A user-message stream owned here        → abort our local controller
+      // Without this, the morning greeting's long tool-call phase keeps
+      // streamState.isStreaming=true and the wake handler used to bail out
+      // entirely → the greeting wasn't interruptible.
+      window.dispatchEvent(new CustomEvent(INTERRUPT_EVENT));
+      abortRef.current?.abort();
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      // Kill any in-flight TTS playback so audio from the assistant doesn't
+      // bleed into the mic via the speakers — the VAD would see that as
+      // continuous speech, the silence timer would never advance, and the
+      // mic would stay open forever.
       stopSpeaking();
+      resetStream();
+
       startRecording({
         autoStop: true,
         onAutoResult: (text) => {
@@ -93,7 +109,7 @@ export function InputArea() {
     };
     window.addEventListener(WAKE_EVENT, onWake);
     return () => window.removeEventListener(WAKE_EVENT, onWake);
-  }, [micDisabled, speechState, startRecording, stopSpeaking]);
+  }, [speechEnabled, speechAvailable, speechState, startRecording, stopSpeaking, resetStream]);
 
   // Track if we should auto-send after transcription
   const autoSendAfterTranscriptionRef = useRef(false);
