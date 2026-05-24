@@ -61,24 +61,29 @@ export function ChatPage() {
       const convId = createConversation(selectedModel);
 
       const now = new Date();
-      const localTime = now.toLocaleString('en-US', {
+      // Localised time string for the briefing — Spanish locale so day-of-week
+      // and month names already arrive in Spanish for the LLM to quote verbatim
+      // ("lunes 23 de mayo de 2026, 7:42 a. m.") rather than translating itself
+      // and risking subtle errors.
+      const localTime = now.toLocaleString('es-CO', {
         timeZone: 'America/Bogota',
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
       });
-      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: You MUST call 'get_weather' and 'digest_collect' (sources: ['gcalendar', 'gmail']) immediately. 
-Format: Report EVERY email and calendar event found in the tool outputs. Greet the user as Mr. Chaux. 
-Local time: ${localTime}.
+      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: DEBES llamar a 'get_weather' y 'digest_collect' (sources: ['gcalendar', 'gmail']) inmediatamente.
+Formato: Reporta CADA correo y evento de calendario que aparezca en las salidas de las herramientas. Saluda al usuario como "señor Chaux".
+Hora local: ${localTime}.
 
-INSIGHT COMMANDS:
-- List all unread emails from the tool output.
-- List all upcoming events for today and tomorrow.
-- Mention Bogotá weather impact on schedule.
+INSTRUCCIONES DE BRIEFING:
+- Enumera todos los correos sin leer que devuelva la herramienta.
+- Enumera todos los eventos próximos para hoy y mañana.
+- Menciona el impacto del clima de Bogotá en la agenda.
 
-ABSOLUTE RULES:
-- YOU MUST report the specific emails found. NEVER say you are missing data if the tools return data.
-- ZERO HALLUCINATION. If a tool fails, say it failed.
-- Stay in character as JARVIS.`;
+REGLAS ABSOLUTAS:
+- DEBES reportar los correos específicos encontrados. NUNCA digas que faltan datos si las herramientas los devolvieron.
+- CERO ALUCINACIÓN. Si una herramienta falla, dilo claramente.
+- Mantente en personaje como JARVIS.
+- Responde TODO en español, con un tono británico formal traducido al castellano (trata al usuario de "usted").`;
 
       const assistantMsgId = generateId();
       addMessage(convId, {
@@ -90,7 +95,7 @@ ABSOLUTE RULES:
 
       setStreamState({
         isStreaming: true,
-        phase: 'Initializing systems...',
+        phase: 'Inicializando sistemas...',
         content: '',
       });
 
@@ -106,13 +111,13 @@ ABSOLUTE RULES:
           if (event.event === 'tool_call_start') {
              try {
                 const data = JSON.parse(event.data);
-                if (data.tool === 'get_weather') setStreamState({ phase: 'Checking meteorological data...' });
-                if (data.tool === 'digest_collect') setStreamState({ phase: 'Synchronizing your briefing...' });
+                if (data.tool === 'get_weather') setStreamState({ phase: 'Consultando datos meteorológicos...' });
+                if (data.tool === 'digest_collect') setStreamState({ phase: 'Sincronizando su informe...' });
              } catch {
-                setStreamState({ phase: 'Processing...' });
+                setStreamState({ phase: 'Procesando...' });
              }
           } else if (event.event === 'tool_call_end') {
-             setStreamState({ phase: 'Synthesizing briefing...' });
+             setStreamState({ phase: 'Sintetizando informe...' });
           } else {
             try {
               const data = JSON.parse(event.data);

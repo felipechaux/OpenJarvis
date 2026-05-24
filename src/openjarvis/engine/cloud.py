@@ -112,6 +112,53 @@ def _is_openrouter_model(model: str) -> bool:
     return model.startswith("openrouter/")
 
 
+def _is_nvidia_model(model: str) -> bool:
+    return model.startswith("nvidia/")
+
+
+def _get_actual_nvidia_model(model: str) -> str:
+    """Resolve the actual model ID for the NVIDIA API.
+
+    If the model starts with 'nvidia/', we strip it once.
+    If the remaining string does not start with any known third-party publisher
+    prefix (implying it is a native NVIDIA model) and does not already start with
+    'nvidia/', we prepend 'nvidia/' to restore the correct ID.
+    """
+    if model.startswith("nvidia/"):
+        actual = model.removeprefix("nvidia/")
+    else:
+        actual = model
+
+    _THIRD_PARTY_PUBLISHERS = (
+        "01-ai/",
+        "abacusai/",
+        "adept/",
+        "ai21labs/",
+        "aisingapore/",
+        "baai/",
+        "bigcode/",
+        "bytedance/",
+        "databricks/",
+        "deepseek-ai/",
+        "google/",
+        "ibm/",
+        "meta/",
+        "microsoft/",
+        "mistralai/",
+        "nv-mistralai/",
+        "qwen/",
+        "stockmark/",
+        "moonshotai/",
+    )
+
+    if not actual.startswith("nvidia/") and not any(
+        actual.startswith(p) for p in _THIRD_PARTY_PUBLISHERS
+    ):
+        return f"nvidia/{actual}"
+
+    return actual
+
+
 def _is_codex_model(model: str) -> bool:
     return model.startswith("codex/")
 
@@ -221,6 +268,7 @@ class CloudEngine(InferenceEngine):
         self._google_client: Any = None
         self._openrouter_client: Any = None
         self._minimax_client: Any = None
+        self._nvidia_client: Any = None
         self._codex_client: Any = None
         # Gemini thought_signatures: tool_call_id -> signature bytes
         self._thought_sigs: Dict[str, bytes] = {}
@@ -270,6 +318,17 @@ class CloudEngine(InferenceEngine):
                 self._minimax_client = openai.OpenAI(
                     base_url="https://api.minimax.io/v1",
                     api_key=minimax_key,
+                )
+            except ImportError:
+                pass
+        nvidia_key = os.environ.get("NVIDIA_API_KEY")
+        if nvidia_key:
+            try:
+                import openai
+
+                self._nvidia_client = openai.OpenAI(
+                    base_url="https://integrate.api.nvidia.com/v1",
+                    api_key=nvidia_key,
                 )
             except ImportError:
                 pass
@@ -811,6 +870,58 @@ class CloudEngine(InferenceEngine):
             "ttft": elapsed,
         }
 
+    def _generate_nvidia(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        if self._nvidia_client is None:
+            raise EngineConnectionError(
+                "NVIDIA client not available — set NVIDIA_API_KEY"
+            )
+        # Strip the "nvidia/" prefix; the real ID may itself contain a slash
+        actual_model = _get_actual_nvidia_model(model)
+        kwargs.pop("response_format", None)
+        create_kwargs: Dict[str, Any] = {
+            "model": actual_model,
+            "messages": messages_to_dicts(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            **kwargs,
+        }
+        t0 = time.monotonic()
+        resp = self._nvidia_client.chat.completions.create(**create_kwargs)
+        elapsed = time.monotonic() - t0
+        choice = resp.choices[0]
+        usage = resp.usage
+        prompt_tokens = usage.prompt_tokens if usage else 0
+        completion_tokens = usage.completion_tokens if usage else 0
+        result: Dict[str, Any] = {
+            "content": choice.message.content or "",
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": (usage.total_tokens if usage else 0),
+            },
+            "model": resp.model,
+            "finish_reason": choice.finish_reason or "stop",
+            "ttft": elapsed,
+        }
+        if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
+            result["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                }
+                for tc in choice.message.tool_calls
+            ]
+        return result
+
     def _generate_minimax(
         self,
         messages: Sequence[Message],
@@ -883,6 +994,8 @@ class CloudEngine(InferenceEngine):
             return self._generate_codex(messages, **kw)
         if _is_openrouter_model(model):
             return self._generate_openrouter(messages, **kw)
+        if _is_nvidia_model(model):
+            return self._generate_nvidia(messages, **kw)
         if _is_minimax_model(model):
             return self._generate_minimax(messages, **kw)
         if _is_anthropic_model(model):
@@ -911,6 +1024,9 @@ class CloudEngine(InferenceEngine):
                 yield token
         elif _is_openrouter_model(model):
             async for token in self._stream_openrouter(messages, **kw):
+                yield token
+        elif _is_nvidia_model(model):
+            async for token in self._stream_nvidia(messages, **kw):
                 yield token
         elif _is_minimax_model(model):
             async for token in self._stream_minimax(messages, **kw):
@@ -1100,6 +1216,31 @@ class CloudEngine(InferenceEngine):
             if delta and delta.content:
                 yield delta.content
 
+    async def _stream_nvidia(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        **kwargs: Any,
+    ) -> AsyncIterator[str]:
+        if self._nvidia_client is None:
+            raise EngineConnectionError("NVIDIA client not available")
+        actual_model = _get_actual_nvidia_model(model)
+        create_kwargs: Dict[str, Any] = {
+            "model": actual_model,
+            "messages": messages_to_dicts(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+        resp = self._nvidia_client.chat.completions.create(**create_kwargs)
+        for chunk in resp:
+            delta = chunk.choices[0].delta if chunk.choices else None
+            if delta and delta.content:
+                yield delta.content
+
     async def _stream_minimax(
         self,
         messages: Sequence[Message],
@@ -1158,6 +1299,19 @@ class CloudEngine(InferenceEngine):
                 raise EngineConnectionError("OpenRouter client not available")
             actual_model = model.removeprefix("openrouter/")
             create_kwargs: Dict[str, Any] = {
+                "model": actual_model,
+                "messages": messages_to_dicts(messages),
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "stream": True,
+                **kwargs,
+            }
+        elif _is_nvidia_model(model):
+            client = self._nvidia_client
+            if client is None:
+                raise EngineConnectionError("NVIDIA client not available")
+            actual_model = _get_actual_nvidia_model(model)
+            create_kwargs = {
                 "model": actual_model,
                 "messages": messages_to_dicts(messages),
                 "max_tokens": max_tokens,
@@ -1331,6 +1485,7 @@ class CloudEngine(InferenceEngine):
             or self._google_client is not None
             or self._openrouter_client is not None
             or self._minimax_client is not None
+            or self._nvidia_client is not None
             or self._codex_client is not None
         )
 
@@ -1353,6 +1508,10 @@ class CloudEngine(InferenceEngine):
             if hasattr(self._minimax_client, "close"):
                 self._minimax_client.close()
             self._minimax_client = None
+        if self._nvidia_client is not None:
+            if hasattr(self._nvidia_client, "close"):
+                self._nvidia_client.close()
+            self._nvidia_client = None
         if self._codex_client is not None:
             self._codex_client = None
 

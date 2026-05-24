@@ -717,7 +717,26 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             .is_ok()
         {
             // Something is already listening — try to kill it
-            #[cfg(unix)]
+            #[cfg(target_os = "macos")]
+            {
+                if let Ok(output) = tokio::process::Command::new("lsof")
+                    .args(["-t", "-i", &format!(":{}", JARVIS_PORT)])
+                    .output()
+                    .await
+                {
+                    let pids = String::from_utf8_lossy(&output.stdout);
+                    for pid in pids.lines() {
+                        if let Ok(pid_val) = pid.trim().parse::<i32>() {
+                            let _ = tokio::process::Command::new("kill")
+                                .args(["-9", &pid_val.to_string()])
+                                .output()
+                                .await;
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
             {
                 let _ = tokio::process::Command::new("fuser")
                     .args(["-k", &format!("{}/tcp", JARVIS_PORT)])

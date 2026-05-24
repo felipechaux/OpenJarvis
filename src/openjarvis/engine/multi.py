@@ -37,7 +37,20 @@ class MultiEngine(InferenceEngine):
             except Exception as exc:
                 logger.debug("Failed to list models for %s: %s", _key, exc)
 
-    _CLOUD_PREFIXES = ("gpt-", "o1-", "o3-", "o4-", "claude-", "gemini-", "openrouter/")
+    # Keep in sync with cloud_router.get_provider() — any prefix that maps to a
+    # cloud provider belongs here so we can route to the cloud engine even when
+    # the model wasn't in any engine's list_models() snapshot (e.g. NVIDIA's
+    # dynamic catalog like ``nvidia/moonshotai/kimi-k2.6`` that we fetch
+    # on-demand in routes.py rather than baking into CloudEngine.list_models).
+    _CLOUD_PREFIXES = (
+        "gpt-", "o1-", "o3-", "o4-", "chatgpt-",
+        "claude-",
+        "gemini-",
+        "openrouter/",
+        "nvidia/",
+        "MiniMax-",
+        "codex/",
+    )
 
     def _engine_for(self, model: str) -> InferenceEngine:
         """Find the engine that owns a model, refreshing the map once if needed."""

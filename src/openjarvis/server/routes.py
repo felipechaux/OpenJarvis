@@ -557,7 +557,11 @@ async def _fetch_nvidia_models(api_key: str) -> list[str]:
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelListResponse:
     """List available models: local (Ollama) + cloud models for any set API keys."""
-    from openjarvis.server.cloud_router import _load_keys, is_cloud_model, list_local_models
+    from openjarvis.server.cloud_router import (
+        _load_keys,
+        is_cloud_model,
+        list_local_models,
+    )
 
     engine = request.app.state.engine
     all_ids = engine.list_models()
@@ -576,10 +580,20 @@ async def list_models(request: Request) -> ModelListResponse:
         ])
 
     if keys.get("OPENAI_API_KEY"):
-        cloud_ids.extend(["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o4-mini", "o3-mini"])
+        cloud_ids.extend([
+            "gpt-4o",
+            "gpt-4o-mini",
+            "gpt-4-turbo",
+            "o4-mini",
+            "o3-mini",
+        ])
 
     if keys.get("ANTHROPIC_API_KEY"):
-        cloud_ids.extend(["claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"])
+        cloud_ids.extend([
+            "claude-sonnet-4-6",
+            "claude-opus-4-7",
+            "claude-haiku-4-5-20251001",
+        ])
 
     if keys.get("OPENROUTER_API_KEY"):
         cloud_ids.extend([
@@ -700,6 +714,7 @@ async def save_cloud_key(request: Request):
         "GOOGLE_API_KEY",
         "OPENROUTER_API_KEY",
         "MINIMAX_API_KEY",
+        "NVIDIA_API_KEY",
     }
     if env_name not in _ALLOWED:
         from fastapi import HTTPException
@@ -738,9 +753,12 @@ async def cloud_keys_status():
     return {
         "OPENAI_API_KEY": bool(keys.get("OPENAI_API_KEY")),
         "ANTHROPIC_API_KEY": bool(keys.get("ANTHROPIC_API_KEY")),
-        "GEMINI_API_KEY": bool(keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY")),
+        "GEMINI_API_KEY": bool(
+            keys.get("GEMINI_API_KEY") or keys.get("GOOGLE_API_KEY")
+        ),
         "OPENROUTER_API_KEY": bool(keys.get("OPENROUTER_API_KEY")),
         "MINIMAX_API_KEY": bool(keys.get("MINIMAX_API_KEY")),
+        "NVIDIA_API_KEY": bool(keys.get("NVIDIA_API_KEY")),
     }
 
 

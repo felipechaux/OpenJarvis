@@ -16,6 +16,21 @@ from openjarvis.engine.cloud import (
 )
 
 
+def _clear_all_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "MINIMAX_API_KEY",
+        "NVIDIA_API_KEY",
+        "OPENAI_CODEX_API_KEY",
+    ]:
+        monkeypatch.delenv(key, raising=False)
+
+
+
 class TestEstimateCost:
     def test_known_model(self) -> None:
         cost = estimate_cost("gpt-4o", 1_000_000, 1_000_000)
@@ -31,8 +46,7 @@ class TestEstimateCost:
 
 class TestCloudEngineHealth:
     def test_health_no_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         EngineRegistry.register_value("cloud", CloudEngine)
         engine = CloudEngine()
         assert engine.health() is False
@@ -49,8 +63,7 @@ class TestCloudEngineHealth:
 
 class TestCloudEngineListModels:
     def test_list_models_no_keys(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         EngineRegistry.register_value("cloud", CloudEngine)
         engine = CloudEngine()
         assert engine.list_models() == []
@@ -132,8 +145,7 @@ class TestCodexModelDetection:
 
 class TestCodexClientInit:
     def test_health_with_codex_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         monkeypatch.setenv("OPENAI_CODEX_API_KEY", "test-token")
         engine = CloudEngine()
         assert engine.health() is True
@@ -142,16 +154,14 @@ class TestCodexClientInit:
         assert "responses" in engine._codex_client["url"]
 
     def test_custom_codex_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         monkeypatch.setenv("OPENAI_CODEX_API_KEY", "test-token")
         monkeypatch.setenv("OPENAI_CODEX_BASE_URL", "http://localhost:9999")
         engine = CloudEngine()
         assert engine._codex_client["url"] == "http://localhost:9999/responses"
 
     def test_list_models_includes_codex(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         monkeypatch.setenv("OPENAI_CODEX_API_KEY", "test-token")
         engine = CloudEngine()
         models = engine.list_models()
@@ -160,9 +170,7 @@ class TestCodexClientInit:
         assert "codex/gpt-5-mini-2025-08-07" in models
 
     def test_no_codex_key_means_no_codex(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-        monkeypatch.delenv("OPENAI_CODEX_API_KEY", raising=False)
+        _clear_all_keys(monkeypatch)
         engine = CloudEngine()
         assert engine._codex_client is None
         assert "codex/gpt-4o" not in engine.list_models()
@@ -290,3 +298,183 @@ class TestCodexGenerate:
         engine._codex_client = {"token": "t", "url": "http://test"}
         engine.close()
         assert engine._codex_client is None
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA provider support
+# ---------------------------------------------------------------------------
+
+
+class TestNvidiaModelDetection:
+    def test_is_nvidia_model(self) -> None:
+        from openjarvis.engine.cloud import _is_nvidia_model
+
+        assert _is_nvidia_model("nvidia/nemotron-4-mini") is True
+        assert _is_nvidia_model("nvidia/moonshotai/kimi-k2.6") is True
+        assert _is_nvidia_model("nemotron-4-mini") is False
+        assert _is_nvidia_model("openrouter/nvidia/nemotron") is False
+
+
+class TestNvidiaClientInit:
+    def test_health_with_nvidia_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_all_keys(monkeypatch)
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        fake_openai = mock.MagicMock()
+        with mock.patch.dict("sys.modules", {"openai": fake_openai}):
+            engine = CloudEngine()
+            assert engine.health() is True
+            assert engine._nvidia_client is not None
+
+    def test_no_nvidia_key_means_no_nvidia(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _clear_all_keys(monkeypatch)
+        engine = CloudEngine()
+        assert engine._nvidia_client is None
+
+
+class TestNvidiaGenerate:
+    def test_generate_nvidia_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        fake_usage = SimpleNamespace(
+            prompt_tokens=15, completion_tokens=8, total_tokens=23
+        )
+        fake_choice = SimpleNamespace(
+            message=SimpleNamespace(content="Nvidia reply", tool_calls=[]),
+            finish_reason="stop",
+        )
+        fake_resp = SimpleNamespace(
+            choices=[fake_choice], usage=fake_usage, model="nemotron-4-mini"
+        )
+
+        fake_client = mock.MagicMock()
+        fake_client.chat.completions.create.return_value = fake_resp
+
+        engine = CloudEngine()
+        engine._nvidia_client = fake_client
+
+        result = engine.generate(
+            [Message(role=Role.USER, content="Hello")],
+            model="nvidia/nemotron-4-mini",
+        )
+        assert result["content"] == "Nvidia reply"
+        assert result["usage"]["prompt_tokens"] == 15
+        assert result["usage"]["completion_tokens"] == 8
+        assert result["model"] == "nemotron-4-mini"
+
+        call_kwargs = fake_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["model"] == "nvidia/nemotron-4-mini"
+
+    @pytest.mark.asyncio
+    async def test_stream_nvidia_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        fake_chunk1 = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk 1"))]
+        )
+        fake_chunk2 = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="Chunk 2"))]
+        )
+
+        fake_client = mock.MagicMock()
+        fake_client.chat.completions.create.return_value = [fake_chunk1, fake_chunk2]
+
+        engine = CloudEngine()
+        engine._nvidia_client = fake_client
+
+        chunks = []
+        async for chunk in engine.stream(
+            [Message(role=Role.USER, content="Stream this")],
+            model="nvidia/nemotron-4-mini",
+        ):
+            chunks.append(chunk)
+
+        assert chunks == ["Chunk 1", "Chunk 2"]
+
+    @pytest.mark.asyncio
+    async def test_stream_full_nvidia_success(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+
+        fake_chunk1 = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    delta=SimpleNamespace(content="FChunk 1", tool_calls=None),
+                    finish_reason=None,
+                )
+            ]
+        )
+        fake_chunk2 = SimpleNamespace(
+            choices=[SimpleNamespace(delta=None, finish_reason="stop")]
+        )
+
+        fake_client = mock.MagicMock()
+        fake_client.chat.completions.create.return_value = [fake_chunk1, fake_chunk2]
+
+        engine = CloudEngine()
+        engine._nvidia_client = fake_client
+
+        from openjarvis.engine._stubs import StreamChunk
+
+        chunks: list[StreamChunk] = []
+        async for chunk in engine.stream_full(
+            [Message(role=Role.USER, content="Stream this")],
+            model="nvidia/nemotron-4-mini",
+        ):
+            chunks.append(chunk)
+
+        assert len(chunks) == 2
+        assert chunks[0].content == "FChunk 1"
+        assert chunks[1].finish_reason == "stop"
+
+    def test_nvidia_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        fake_client = mock.MagicMock()
+        engine = CloudEngine()
+        engine._nvidia_client = fake_client
+        engine.close()
+        assert engine._nvidia_client is None
+        fake_client.close.assert_called_once()
+
+
+class TestNvidiaModelMapping:
+    def test_get_actual_nvidia_model(self) -> None:
+        from openjarvis.engine.cloud import _get_actual_nvidia_model
+
+        # Native models
+        assert (
+            _get_actual_nvidia_model("nvidia/nemotron-4-mini")
+            == "nvidia/nemotron-4-mini"
+        )
+        assert (
+            _get_actual_nvidia_model("nemotron-4-mini")
+            == "nvidia/nemotron-4-mini"
+        )
+        assert (
+            _get_actual_nvidia_model("nvidia/nvidia/nemotron-4-mini")
+            == "nvidia/nemotron-4-mini"
+        )
+
+        # Third-party models
+        assert (
+            _get_actual_nvidia_model("nvidia/moonshotai/kimi-k2.6")
+            == "moonshotai/kimi-k2.6"
+        )
+        assert (
+            _get_actual_nvidia_model("nvidia/google/gemma-2b")
+            == "google/gemma-2b"
+        )
+        assert (
+            _get_actual_nvidia_model("google/gemma-2b")
+            == "google/gemma-2b"
+        )
+        assert (
+            _get_actual_nvidia_model("nvidia/meta/llama-3.1-8b-instruct")
+            == "meta/llama-3.1-8b-instruct"
+        )
+
+
+

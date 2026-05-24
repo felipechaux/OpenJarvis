@@ -10,6 +10,27 @@ export interface AudioAnalyzerData {
 
 const ABBREVS = /\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|No|Fig)\./g;
 
+// Edge-TTS voice IDs.  British male for English (matches Iron Man's JARVIS),
+// Castilian male for Spanish (more formal, distinct 'c'/'z' that pairs well
+// with the British formality of the English voice).
+const VOICE_EN = 'en-GB-RyanNeural';
+const VOICE_ES = 'es-ES-AlvaroNeural';
+
+// Heuristic Spanish detector.  Two signals catch nearly every real sentence:
+//   1. Spanish-only orthography: ñ, inverted punctuation, accented vowels, ü.
+//   2. Short greetings/connectors that often lack diacritics ("hola", "gracias").
+// We deliberately keep the wordlist tight to avoid false positives on English
+// text that happens to contain "que" or "como" (English imports).
+const SPANISH_ORTHOGRAPHY = /[ñ¿¡áéíóúüÑÁÉÍÓÚÜ]/;
+const SPANISH_WORDS = /\b(hola|gracias|buenas|buenos|dias|dia|tardes|noches|señor|señora|usted|ustedes|estas|estoy|estamos|aqui|alli|tambien)\b/i;
+
+function detectVoice(text: string): string {
+  if (SPANISH_ORTHOGRAPHY.test(text) || SPANISH_WORDS.test(text)) {
+    return VOICE_ES;
+  }
+  return VOICE_EN;
+}
+
 function cleanForSpeech(text: string): string {
   return text
     .replace(/```[\s\S]*?```/g, '')
@@ -94,15 +115,20 @@ export function useTTS() {
     };
   }, [speaking, analyzeAudio]);
 
-  // Fetch audio bytes only — no playback
-  const fetchAudio = useCallback(async (text: string, voiceId = 'en-GB-RyanNeural'): Promise<ArrayBuffer | null> => {
+  // Fetch audio bytes only — no playback.  When no voice is forced, pick
+  // EN vs ES from the text itself so Spanish replies don't get spoken in
+  // English (which sounds awful and is unintelligible to non-English
+  // listeners).  Detection runs after markdown stripping so list bullets
+  // / code fences don't skew it.
+  const fetchAudio = useCallback(async (text: string, voiceId?: string): Promise<ArrayBuffer | null> => {
     const clean = cleanForSpeech(text);
     if (!clean) return null;
+    const voice = voiceId ?? detectVoice(clean);
     try {
       const res = await fetch(`${getBase()}/v1/speech/synthesize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: clean, voice_id: voiceId }),
+        body: JSON.stringify({ text: clean, voice_id: voice }),
       });
       if (!res.ok) {
         console.warn('[TTS] synthesize failed:', res.status);
@@ -196,8 +222,9 @@ export function useTTS() {
     drainQueue();
   }, [drainQueue]);
 
-  // Immediate speak — interrupts queue
-  const speak = useCallback(async (text: string, voiceId = 'en-GB-RyanNeural') => {
+  // Immediate speak — interrupts queue.  Like fetchAudio, voice auto-detects
+  // when not overridden.
+  const speak = useCallback(async (text: string, voiceId?: string) => {
     stopRequestedRef.current = true;
     queueRef.current = [];
     drainingRef.current = false;

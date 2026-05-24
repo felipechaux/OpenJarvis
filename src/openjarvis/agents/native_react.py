@@ -95,6 +95,31 @@ the response can take one of two forms:
   3. DO NOT call the same skill again — you already have its instructions
   4. Synthesize a Final Answer from what you learned
 
+# Language
+
+Match the user's language.  If the user writes in Spanish, your `Thought:` and
+`Final Answer:` content must be in Spanish; if English, English.  Code-switch
+naturally if the user does.
+
+The protocol KEYWORDS themselves stay in English (`Thought:`, `Action:`,
+`Action Input:`, `Final Answer:`) — only the prose that follows them is
+translated.  The harness only parses these English literals; emitting
+`Pensamiento:` / `Acción:` / `Respuesta Final:` would not be parsed and the
+turn would be wasted.
+
+# When NOT to call tools
+
+For casual conversation — greetings ("hola", "hi", "cómo estás"), small talk,
+opinions, definitions you already know, follow-ups that don't reference the
+user's data — go DIRECTLY to a `Final Answer:` on turn 1.  Do NOT call
+`knowledge_search` or `digest_collect` for these.  Calling tools speculatively
+on casual Spanish/English input is the #1 cause of the agent looping until
+max_turns and the user seeing a spinner with no response.
+
+Only call a tool when the user's message references THEIR data (their notes,
+emails, calendar, contacts) or asks something only a tool can answer
+(weather, web search, calculations).
+
 {skill_examples}{tool_descriptions}"""
 
 
@@ -241,33 +266,45 @@ class NativeReActAgent(ToolUsingAgent):
         return name, _json.dumps(kwargs)
 
     def _parse_response(self, text: str) -> dict:
-        """Parse ReAct structured output."""
+        """Parse ReAct structured output.
+
+        Accepts the canonical English labels (the prompt explicitly tells the
+        model to keep these in English) and their Spanish equivalents as a
+        defensive fallback — without this, a Spanish user query like "hola"
+        could push the model into emitting "Respuesta Final: Hola, ¿en qué
+        puedo ayudarle?" which the parser would not recognize, sending the
+        agent into a max_turns loop that the user perceives as a hang.
+        """
         result = {"thought": "", "action": "", "action_input": "", "final_answer": ""}
 
-        # Extract Thought
+        # Extract Thought / Pensamiento
         thought_match = re.search(
-            r"Thought:\s*(.+?)(?=\nAction:|\nFinal Answer:|\Z)",
+            r"(?:Thought|Pensamiento):\s*(.+?)(?=\n(?:Action|Acción)|\n(?:Final Answer|Respuesta Final):|\Z)",
             text,
             re.DOTALL | re.IGNORECASE,
         )
         if thought_match:
             result["thought"] = thought_match.group(1).strip()
 
-        # Check for Final Answer
+        # Check for Final Answer / Respuesta Final
         final_match = re.search(
-            r"Final Answer:\s*(.+)", text, re.DOTALL | re.IGNORECASE
+            r"(?:Final Answer|Respuesta Final):\s*(.+)",
+            text,
+            re.DOTALL | re.IGNORECASE,
         )
         if final_match:
             result["final_answer"] = final_match.group(1).strip()
             return result
 
-        # Extract Action and Action Input
-        action_match = re.search(r"Action:\s*(.+)", text, re.IGNORECASE)
+        # Extract Action / Acción and Action Input / Entrada de Acción
+        action_match = re.search(
+            r"(?:Action|Acción):\s*(.+)", text, re.IGNORECASE
+        )
         if action_match:
             result["action"] = action_match.group(1).strip()
 
         input_match = re.search(
-            r"Action Input:\s*(.+?)(?=\n\n|\nThought:|\Z)",
+            r"(?:Action Input|Entrada de Acción):\s*(.+?)(?=\n\n|\n(?:Thought|Pensamiento):|\Z)",
             text,
             re.DOTALL | re.IGNORECASE,
         )

@@ -48,6 +48,7 @@ const _STORAGE_KEY_TO_ENV: Record<string, string> = {
   'openjarvis-gemini-key': 'GEMINI_API_KEY',
   'openjarvis-openrouter-key': 'OPENROUTER_API_KEY',
   'openjarvis-minimax-key': 'MINIMAX_API_KEY',
+  'openjarvis-nvidia-key': 'NVIDIA_API_KEY',
 };
 
 async function persistKeyToBackend(envName: string, value: string) {
@@ -358,6 +359,8 @@ export function SettingsPage() {
                 <CloudProviderStatus label="Anthropic" storageKey="openjarvis-anthropic-key" />
                 <CloudProviderStatus label="Google" storageKey="openjarvis-gemini-key" />
                 <CloudProviderStatus label="OpenRouter" storageKey="openjarvis-openrouter-key" />
+                <CloudProviderStatus label="MiniMax" storageKey="openjarvis-minimax-key" />
+                <CloudProviderStatus label="NVIDIA" storageKey="openjarvis-nvidia-key" />
               </div>
             </SettingRow>
           </Section>
@@ -375,6 +378,12 @@ export function SettingsPage() {
             </SettingRow>
             <SettingRow label="OpenRouter" description="Multi-provider routing">
               <ApiKeyInput storageKey="openjarvis-openrouter-key" placeholder="sk-or-..." />
+            </SettingRow>
+            <SettingRow label="MiniMax" description="MiniMax models">
+              <ApiKeyInput storageKey="openjarvis-minimax-key" placeholder="API key..." />
+            </SettingRow>
+            <SettingRow label="NVIDIA" description="NVIDIA models">
+              <ApiKeyInput storageKey="openjarvis-nvidia-key" placeholder="nvapi-..." />
             </SettingRow>
           </Section>
 

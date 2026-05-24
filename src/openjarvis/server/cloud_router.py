@@ -16,6 +16,7 @@ from typing import Any, Sequence
 import httpx
 
 from openjarvis.core.types import Message
+from openjarvis.engine.cloud import _get_actual_nvidia_model
 
 # ---------------------------------------------------------------------------
 # Key / provider detection
@@ -404,7 +405,7 @@ async def stream_cloud(
         api_key = keys.get("NVIDIA_API_KEY", "")
         if not api_key:
             raise ValueError("NVIDIA_API_KEY not set — add it in the Cloud Models tab")
-        real_model = model[7:] if model.startswith("nvidia/") else model
+        real_model = _get_actual_nvidia_model(model)
         async for token in _stream_openai(
             real_model,
             messages,
