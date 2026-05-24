@@ -64,6 +64,7 @@ class EdgeTTSBackend(TTSBackend):
         "es-CO-GonzaloNeural", # Colombian male
         "es-CO-SalomeNeural",  # Colombian female
         "es-ES-AlvaroNeural",  # Spanish male
+        "es-ES-ElviraNeural",  # Spanish female
         "es-MX-JorgeNeural",   # Mexican male
     ]
 
@@ -83,9 +84,9 @@ class EdgeTTSBackend(TTSBackend):
         actual_voice = voice_id or _DEFAULT_VOICE
         if actual_voice.startswith("en-") and _is_spanish(text):
             if any(n in actual_voice for n in ("Sonia", "Libby", "Aria")):
-                actual_voice = "es-CO-SalomeNeural"
+                actual_voice = "es-ES-ElviraNeural"
             else:
-                actual_voice = "es-CO-GonzaloNeural"
+                actual_voice = "es-ES-AlvaroNeural"
 
 
         # Convert speed multiplier to edge-tts rate string (e.g. 1.1 → "+10%")
