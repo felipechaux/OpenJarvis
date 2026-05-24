@@ -72,11 +72,15 @@ def test_kokoro_registered():
 
 
 def test_kokoro_health_false_without_package():
+    import sys
+    from unittest import mock
+
     from openjarvis.speech.kokoro_tts import KokoroTTSBackend
 
     backend = KokoroTTSBackend()
-    # Without kokoro installed, health returns False
-    assert backend.health() is False
+    with mock.patch.dict(sys.modules, {"kokoro": None}):
+        # Without kokoro installed, health returns False
+        assert backend.health() is False
 
 
 # ---------------------------------------------------------------------------
@@ -104,3 +108,62 @@ def test_openai_tts_synthesize():
 
     assert result.audio == b"fake-openai-audio"
     assert result.voice_id == "nova"
+
+
+# ---------------------------------------------------------------------------
+# Edge TTS backend tests
+# ---------------------------------------------------------------------------
+
+
+def test_edge_tts_registered():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend  # noqa: F401
+
+    assert TTSRegistry.contains("edge_tts")
+
+
+def test_edge_tts_is_spanish_helper():
+    from openjarvis.speech.edge_tts_backend import _is_spanish
+
+    assert _is_spanish("He consultado su correo y calendario.") is True
+    assert _is_spanish("Buenos días señor, ¿cómo está?") is True
+    assert _is_spanish("Hello sir, how are you today?") is False
+    assert _is_spanish("I am your helpful AI assistant.") is False
+
+
+def test_edge_tts_synthesize_autoswitch():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+    backend = EdgeTTSBackend()
+
+    # We mock edge_tts Communicate to prevent actual network calls during test
+    with patch("edge_tts.Communicate") as mock_comm:
+        # 1. English text -> stays English voice
+        backend.synthesize("Hello sir, how are you?", voice_id="en-GB-RyanNeural")
+        mock_comm.assert_called_with(
+            "Hello sir, how are you?",
+            voice="en-GB-RyanNeural",
+            rate="+8%",
+            pitch="-5Hz",
+        )
+
+        # 2. Spanish text + English male voice -> switches to Colombian Spanish
+        backend.synthesize(
+            "He consultado su correo, señor.", voice_id="en-GB-RyanNeural"
+        )
+        mock_comm.assert_called_with(
+            "He consultado su correo, señor.",
+            voice="es-CO-GonzaloNeural",
+            rate="+8%",
+            pitch="-5Hz",
+        )
+
+        # 3. Spanish text + English female voice -> switches to Colombian Spanish
+        backend.synthesize("Buenos días sir.", voice_id="en-GB-SoniaNeural")
+        mock_comm.assert_called_with(
+            "Buenos días sir.",
+            voice="es-CO-SalomeNeural",
+            rate="+8%",
+            pitch="-5Hz",
+        )
+
+

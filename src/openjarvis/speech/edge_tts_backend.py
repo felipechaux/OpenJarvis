@@ -20,9 +20,37 @@ _DEFAULT_RATE = "+8%"    # a touch crisper/faster
 _DEFAULT_PITCH = "-5Hz"  # slightly lower, more authoritative
 
 
+def _is_spanish(text: str) -> bool:
+    """Helper to detect if the input text contains significant Spanish content."""
+    import re
+
+    # Check for Spanish-specific accented characters
+    if any(char in text for char in "¿¡ñáéíóúüÑÁÉÍÓÚÜ"):
+        return True
+
+    # Check ratio of common Spanish stop words (case-insensitive)
+    spanish_stopwords = {
+        "el", "la", "los", "las", "un", "una", "y", "en", "que", "de", "con",
+        "para", "por", "su", "sus", "como", "este", "esta", "es", "son",
+        "correo", "calendario", "hola", "buenos", "días", "tardes", "noches",
+        "señor", "sí", "pero", "más", "mi", "mis", "al", "del", "lo", "tengo",
+        "tiene", "he", "ha", "hay", "esta", "está", "estoy", "cómo", "hola",
+        "gracias", "por", "favor", "su", "correo", "calendario"
+    }
+
+    words = re.findall(r"\b[a-zA-ZáéíóúüñÑ]+\b", text.lower())
+    if not words:
+        return False
+
+    spanish_count = sum(1 for w in words if w in spanish_stopwords)
+    return (spanish_count / len(words)) >= 0.15
+
+
 @TTSRegistry.register("edge_tts")
 class EdgeTTSBackend(TTSBackend):
-    """Microsoft Edge neural TTS — high-quality British voices, free, offline-capable."""
+    """Microsoft Edge neural TTS — high-quality British voices,
+    free, offline-capable.
+    """
 
     backend_id = "edge_tts"
 
@@ -33,6 +61,10 @@ class EdgeTTSBackend(TTSBackend):
         "en-GB-LibbyNeural",   # British female
         "en-US-GuyNeural",     # American male
         "en-US-AriaNeural",    # American female
+        "es-CO-GonzaloNeural", # Colombian male
+        "es-CO-SalomeNeural",  # Colombian female
+        "es-ES-AlvaroNeural",  # Spanish male
+        "es-MX-JorgeNeural",   # Mexican male
     ]
 
     def synthesize(
@@ -45,6 +77,17 @@ class EdgeTTSBackend(TTSBackend):
     ) -> TTSResult:
         import edge_tts
 
+        # Resolve actual voice. If the selected voice is English but the text
+        # is Spanish, fallback to a premium Spanish voice (respecting gender
+        # mapping if possible).
+        actual_voice = voice_id or _DEFAULT_VOICE
+        if actual_voice.startswith("en-") and _is_spanish(text):
+            if any(n in actual_voice for n in ("Sonia", "Libby", "Aria")):
+                actual_voice = "es-CO-SalomeNeural"
+            else:
+                actual_voice = "es-CO-GonzaloNeural"
+
+
         # Convert speed multiplier to edge-tts rate string (e.g. 1.1 → "+10%")
         rate_pct = round((speed - 1.0) * 100)
         base_rate_pct = int(_DEFAULT_RATE.rstrip("%").lstrip("+"))
@@ -56,7 +99,7 @@ class EdgeTTSBackend(TTSBackend):
         async def _run():
             comm = edge_tts.Communicate(
                 text,
-                voice=voice_id or _DEFAULT_VOICE,
+                voice=actual_voice,
                 rate=rate_str,
                 pitch=_DEFAULT_PITCH,
             )
@@ -79,9 +122,10 @@ class EdgeTTSBackend(TTSBackend):
         return TTSResult(
             audio=audio_bytes,
             format="mp3",
-            voice_id=voice_id or _DEFAULT_VOICE,
+            voice_id=actual_voice,
             metadata={"backend": "edge_tts"},
         )
+
 
     def available_voices(self) -> List[str]:
         return self._VOICES
