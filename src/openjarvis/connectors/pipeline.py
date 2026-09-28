@@ -2,7 +2,8 @@
 
 Takes ``Document`` objects from connectors, deduplicates by ``doc_id``,
 splits content using ``SemanticChunker``, and persists chunks to a
-``KnowledgeStore``.
+``KnowledgeStore``.  A document seen again with a different timestamp
+(an edited note, a newer weather reading) replaces its old chunks.
 
 Typical usage::
 
@@ -48,7 +49,8 @@ class IngestionPipeline:
         self._store = store
         self._chunker = SemanticChunker(max_tokens=max_tokens)
         self._attachment_store = attachment_store
-        self._seen_doc_ids: set[str] = set()
+        # doc_id → timestamp string of the indexed version.
+        self._seen_doc_ids: dict[str, str] = {}
         self._load_existing_doc_ids()
 
     # ------------------------------------------------------------------
@@ -58,9 +60,9 @@ class IngestionPipeline:
     def _load_existing_doc_ids(self) -> None:
         """Populate ``_seen_doc_ids`` from rows already in the store."""
         rows = self._store._conn.execute(
-            "SELECT DISTINCT doc_id FROM knowledge_chunks"
+            "SELECT doc_id, MAX(timestamp) FROM knowledge_chunks GROUP BY doc_id"
         ).fetchall()
-        self._seen_doc_ids = {r[0] for r in rows}
+        self._seen_doc_ids = {r[0]: r[1] or "" for r in rows}
 
     def _extract_attachment_text(self, att: Attachment) -> str:
         """Extract text from an attachment.
@@ -89,8 +91,11 @@ class IngestionPipeline:
     def ingest(self, documents: Iterable[Document]) -> int:
         """Ingest an iterable of documents into the knowledge store.
 
-        Duplicate ``doc_id`` values are silently skipped (both across
-        calls and within a single batch).
+        A ``doc_id`` already indexed with the same timestamp is skipped, as
+        is a repeat within this call.  One indexed with a different
+        timestamp was updated at the source: its old chunks are replaced.
+        Without this, an edited note (or a corrected date) never reached
+        the index.
 
         Parameters
         ----------
@@ -104,10 +109,21 @@ class IngestionPipeline:
             The total number of chunks written to the store in this call.
         """
         chunks_stored = 0
+        ingested_now: set[str] = set()
 
         for doc in documents:
-            if doc.doc_id in self._seen_doc_ids:
+            # Normalise the timestamp to a string once.
+            if hasattr(doc.timestamp, "isoformat"):
+                timestamp_str = doc.timestamp.isoformat()
+            else:
+                timestamp_str = str(doc.timestamp)
+
+            if doc.doc_id in ingested_now:
                 continue
+            if doc.doc_id in self._seen_doc_ids:
+                if self._seen_doc_ids[doc.doc_id] == timestamp_str:
+                    continue
+                self._store.delete(doc.doc_id)
 
             # Build the parent metadata dict that will be inherited by every
             # chunk produced from this document.
@@ -122,12 +138,6 @@ class IngestionPipeline:
             # Merge any extra connector-level metadata (without overwriting
             # the standard provenance fields set above).
             parent_meta.update(doc.metadata)
-
-            # Normalise the timestamp to a string once.
-            if hasattr(doc.timestamp, "isoformat"):
-                timestamp_str = doc.timestamp.isoformat()
-            else:
-                timestamp_str = str(doc.timestamp)
 
             # Chunk the document content using the type-aware strategy.
             chunks = self._chunker.chunk(
@@ -196,7 +206,8 @@ class IngestionPipeline:
                             )
                             chunks_stored += 1
 
-            self._seen_doc_ids.add(doc.doc_id)
+            self._seen_doc_ids[doc.doc_id] = timestamp_str
+            ingested_now.add(doc.doc_id)
 
         return chunks_stored
 

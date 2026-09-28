@@ -123,8 +123,17 @@ class IMessageConnector(BaseConnector):
 
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        except sqlite3.OperationalError:
-            return
+        except sqlite3.OperationalError as exc:
+            if not Path(db_path).exists():
+                return
+            # The file exists (so is_connected() is True) but macOS privacy
+            # blocks reading it.  Returning quietly made every sync "succeed"
+            # with 0 messages; raise so the sync state shows why.
+            raise PermissionError(
+                f"Cannot read {db_path} ({exc}). Grant Full Disk Access to the "
+                "app running the JARVIS server (System Settings → Privacy & "
+                "Security → Full Disk Access)."
+            ) from exc
 
         try:
             # ------------------------------------------------------------------

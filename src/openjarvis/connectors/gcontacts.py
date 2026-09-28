@@ -17,6 +17,7 @@ from openjarvis.connectors.oauth import (
     GOOGLE_ALL_SCOPES,
     build_google_auth_url,
     delete_tokens,
+    get_valid_google_token,
     load_tokens,
     resolve_google_credentials,
     run_oauth_flow,
@@ -166,12 +167,8 @@ class GContactsConnector(BaseConnector):
     # ------------------------------------------------------------------
 
     def is_connected(self) -> bool:
-        """Return ``True`` if a credentials file with a valid access token exists."""
-        tokens = load_tokens(self._credentials_path)
-        if tokens is None:
-            return False
-        # Must have an actual access_token, not just a client_id
-        return bool(tokens.get("access_token") or tokens.get("token"))
+        """True if credentials exist and yield a valid (refreshed) token."""
+        return bool(get_valid_google_token(self._credentials_path))
 
     def disconnect(self) -> None:
         """Delete the stored credentials file."""
@@ -246,11 +243,9 @@ class GContactsConnector(BaseConnector):
         cursor:
             ``nextPageToken`` from a previous sync to resume pagination.
         """
-        tokens = load_tokens(self._credentials_path)
-        if not tokens:
-            return
-
-        token: str = tokens.get("access_token", tokens.get("token", ""))
+        # Refresh when expired — the stored access token lives one hour, and
+        # using it raw made every sync after that fail with 401.
+        token = get_valid_google_token(self._credentials_path)
         if not token:
             return
 

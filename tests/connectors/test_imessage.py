@@ -200,3 +200,28 @@ def test_registry() -> None:
     assert ConnectorRegistry.contains("imessage")
     cls = ConnectorRegistry.get("imessage")
     assert cls.connector_id == "imessage"
+
+
+def test_sync_missing_db_yields_nothing() -> None:
+    from openjarvis.connectors.imessage import IMessageConnector  # noqa: PLC0415
+
+    assert list(IMessageConnector(db_path="/nonexistent/path/chat.db").sync()) == []
+
+
+def test_sync_unreadable_db_raises_permission_error(tmp_path, monkeypatch) -> None:
+    """A privacy-blocked chat.db must surface an error, not a silent 0."""
+    import sqlite3
+
+    import pytest
+
+    from openjarvis.connectors import imessage  # noqa: PLC0415
+
+    db = tmp_path / "chat.db"
+    db.write_bytes(b"")
+
+    def blocked(*_a, **_k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(imessage.sqlite3, "connect", blocked)
+    with pytest.raises(PermissionError, match="Full Disk Access"):
+        list(imessage.IMessageConnector(db_path=str(db)).sync())

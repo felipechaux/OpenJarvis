@@ -292,3 +292,39 @@ def test_ingest_chunk_count_return_value(
     assert n2 == 1  # only doc_c is new
 
     assert store.count() == 3
+
+
+# ---------------------------------------------------------------------------
+# Updated documents replace their old chunks
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_replaces_doc_when_timestamp_changes(store: KnowledgeStore) -> None:
+    """An edited source document (new timestamp) replaces the indexed one."""
+    old = _make_doc(doc_id="note:1", content="Lista vieja: leche")
+    new = _make_doc(
+        doc_id="note:1",
+        content="Lista nueva: café y pan",
+        timestamp=datetime(2026, 9, 28, tzinfo=timezone.utc),
+    )
+    IngestionPipeline(store).ingest([old])
+
+    # A fresh pipeline, like the next server start.
+    n = IngestionPipeline(store).ingest([new])
+
+    assert n == 1
+    rows = store._conn.execute(
+        "SELECT content, timestamp FROM knowledge_chunks WHERE doc_id = 'note:1'"
+    ).fetchall()
+    assert [(r[0], r[1][:10]) for r in rows] == [
+        ("Lista nueva: café y pan", "2026-09-28")
+    ]
+    assert store.retrieve("leche") == []
+    assert len(store.retrieve("café")) == 1
+
+
+def test_ingest_keeps_doc_when_timestamp_unchanged(store: KnowledgeStore) -> None:
+    doc = _make_doc(doc_id="note:2", content="Sin cambios")
+    IngestionPipeline(store).ingest([doc])
+    assert IngestionPipeline(store).ingest([doc]) == 0
+    assert store.count() == 1

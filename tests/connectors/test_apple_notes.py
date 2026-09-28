@@ -208,3 +208,59 @@ def test_registry() -> None:
     assert ConnectorRegistry.contains("apple_notes")
     cls = ConnectorRegistry.get("apple_notes")
     assert cls.connector_id == "apple_notes"
+
+
+# ---------------------------------------------------------------------------
+# Modern schema: date in ZMODIFICATIONDATE1, ZMODIFICATIONDATE NULL
+# ---------------------------------------------------------------------------
+
+
+def test_sync_reads_modern_modification_date(tmp_path: Path) -> None:
+    """Current macOS leaves ZMODIFICATIONDATE NULL; the date is in ...DATE1."""
+    from openjarvis.connectors.apple_notes import AppleNotesConnector  # noqa: PLC0415
+
+    db_path = tmp_path / "NoteStore.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    conn.executescript("""
+        CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+            Z_PK INTEGER PRIMARY KEY, ZTITLE TEXT, ZTITLE1 TEXT,
+            ZMODIFICATIONDATE REAL, ZMODIFICATIONDATE1 REAL,
+            ZIDENTIFIER TEXT, ZNOTE INTEGER
+        );
+        CREATE TABLE ZICNOTEDATA (Z_PK INTEGER PRIMARY KEY, ZDATA BLOB, ZNOTE INTEGER);
+    """)
+    # 812246400 s after 2001-01-01 UTC = 2026-09-28 00:00 UTC
+    conn.execute(
+        "INSERT INTO ZICCLOUDSYNCINGOBJECT VALUES "
+        "(1, NULL, 'Ideas', NULL, 812246400.0, 'note-new', 1)"
+    )
+    conn.execute(
+        "INSERT INTO ZICNOTEDATA VALUES (1, ?, 1)",
+        (gzip.compress(b"<p>Ideas para JARVIS</p>"),),
+    )
+    conn.commit()
+    conn.close()
+
+    docs = list(AppleNotesConnector(db_path=str(db_path)).sync())
+    assert len(docs) == 1
+    assert docs[0].timestamp.date().isoformat() == "2026-09-28"
+
+
+def test_sync_old_schema_without_date1_still_works(connector) -> None:
+    """Schemas without ZMODIFICATIONDATE1 keep using ZMODIFICATIONDATE."""
+    docs = list(connector.sync())
+    assert {d.timestamp.year for d in docs} == {2023}
+
+
+def test_sync_unreadable_db_raises_permission_error(tmp_path, monkeypatch) -> None:
+    from openjarvis.connectors import apple_notes  # noqa: PLC0415
+
+    db = tmp_path / "NoteStore.sqlite"
+    db.write_bytes(b"")
+
+    def blocked(*_a, **_k):
+        raise sqlite3.OperationalError("unable to open database file")
+
+    monkeypatch.setattr(apple_notes.sqlite3, "connect", blocked)
+    with pytest.raises(PermissionError, match="Privacy"):
+        list(apple_notes.AppleNotesConnector(db_path=str(db)).sync())

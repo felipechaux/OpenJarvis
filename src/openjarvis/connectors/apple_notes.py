@@ -70,6 +70,33 @@ def _apple_ts_to_datetime(apple_seconds: float) -> datetime:
     return _APPLE_EPOCH + timedelta(seconds=apple_seconds)
 
 
+def _notes_query(conn: sqlite3.Connection) -> str:
+    """SELECT for (identifier, title, modification date, data), per schema.
+
+    Current macOS keeps the modification date in ``ZMODIFICATIONDATE1`` and
+    leaves ``ZMODIFICATIONDATE`` NULL for notes, so reading only the latter
+    dated every note 2001-01-01 — breaking recency and incremental sync.
+    Older schemas lack ``ZTITLE1`` / ``ZMODIFICATIONDATE1``.
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(ZICCLOUDSYNCINGOBJECT)")}
+    title = (
+        "COALESCE(n.ZTITLE1, n.ZTITLE, '')"
+        if "ZTITLE1" in cols
+        else "COALESCE(n.ZTITLE, '')"
+    )
+    modified = (
+        "COALESCE(n.ZMODIFICATIONDATE1, n.ZMODIFICATIONDATE)"
+        if "ZMODIFICATIONDATE1" in cols
+        else "n.ZMODIFICATIONDATE"
+    )
+    return (
+        f"SELECT n.ZIDENTIFIER, {title} AS title, {modified} AS modified, d.ZDATA "
+        "FROM ZICCLOUDSYNCINGOBJECT n "
+        "JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK "
+        "ORDER BY modified ASC"
+    )
+
+
 def _extract_text_from_zdata(zdata: bytes) -> str:
     """Decompress gzip bytes and extract plain text from the protobuf payload.
 
@@ -167,29 +194,18 @@ class AppleNotesConnector(BaseConnector):
 
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        except sqlite3.OperationalError:
-            return
+        except sqlite3.OperationalError as exc:
+            if not Path(db_path).exists():
+                return
+            # Exists but unreadable = macOS privacy block; don't report a
+            # silent, empty "successful" sync.
+            raise PermissionError(
+                f"Cannot read {db_path} ({exc}). Grant the app running the "
+                "JARVIS server access in System Settings → Privacy & Security."
+            ) from exc
 
         try:
-            try:
-                rows = conn.execute(
-                    "SELECT n.ZIDENTIFIER, "
-                    "  COALESCE(n.ZTITLE1, n.ZTITLE, '') AS title, "
-                    "  n.ZMODIFICATIONDATE, d.ZDATA "
-                    "FROM ZICCLOUDSYNCINGOBJECT n "
-                    "JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK "
-                    "ORDER BY n.ZMODIFICATIONDATE ASC"
-                ).fetchall()
-            except sqlite3.OperationalError:
-                # Older macOS schemas may lack ZTITLE1
-                rows = conn.execute(
-                    "SELECT n.ZIDENTIFIER, "
-                    "  COALESCE(n.ZTITLE, '') AS title, "
-                    "  n.ZMODIFICATIONDATE, d.ZDATA "
-                    "FROM ZICCLOUDSYNCINGOBJECT n "
-                    "JOIN ZICNOTEDATA d ON d.ZNOTE = n.Z_PK "
-                    "ORDER BY n.ZMODIFICATIONDATE ASC"
-                ).fetchall()
+            rows = conn.execute(_notes_query(conn)).fetchall()
 
             self._items_total = len(rows)
             synced = 0
