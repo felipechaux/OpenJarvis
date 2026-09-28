@@ -13,6 +13,7 @@ import type {
 } from '../types';
 import type { ManagedAgent } from './api';
 import type { AudioAnalyzerData } from '../hooks/useTTS';
+import type { SpeechState } from '../hooks/useSpeech';
 
 export interface CachedConnector {
   connector_id: string;
@@ -226,6 +227,13 @@ interface AppState {
   ttsAudioData: AudioAnalyzerData;
   setTTSSpeaking: (speaking: boolean) => void;
   setTTSAudioData: (data: AudioAnalyzerData) => void;
+
+  // Mic capture state — mirrored from useSpeech so presence visuals
+  // (ArcReactor, companion) can react to the user's voice.
+  speechState: SpeechState;
+  micLevel: number;
+  setSpeechState: (state: SpeechState) => void;
+  setMicLevel: (level: number) => void;
 
   // Initial greeting
   greeted: boolean;
@@ -495,6 +503,12 @@ export const useAppStore = create<AppState>((set, get) => {
     },
     setTTSSpeaking: (speaking) => set({ ttsSpeaking: speaking }),
     setTTSAudioData: (data) => set({ ttsAudioData: data }),
+
+    // ── Mic ──────────────────────────────────────────────────────────
+    speechState: 'idle',
+    micLevel: 0,
+    setSpeechState: (speechState) => set({ speechState }),
+    setMicLevel: (micLevel) => set({ micLevel }),
 
     // ── Initial Greeting ─────────────────────────────────────────────
     greeted: false,

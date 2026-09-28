@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router';
 import { MessageBubble } from './MessageBubble';
 import { InputArea } from './InputArea';
 import { StreamingDots } from './StreamingDots';
-import { ArcReactor } from './ArcReactor';
+import { PresenceCore } from './PresenceCore';
+import { usePresence } from '../../hooks/usePresence';
 import { useAppStore } from '../../lib/store';
 import { PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
@@ -20,8 +21,7 @@ export function ChatArea() {
   const streamState = useAppStore((s) => s.streamState);
   const systemPanelOpen = useAppStore((s) => s.systemPanelOpen);
   const toggleSystemPanel = useAppStore((s) => s.toggleSystemPanel);
-  const ttsSpeaking = useAppStore((s) => s.ttsSpeaking);
-  const ttsAudioData = useAppStore((s) => s.ttsAudioData);
+  const presence = usePresence();
   const navigate = useNavigate();
   const listRef = useRef<HTMLDivElement>(null);
   const shouldAutoScroll = useRef(true);
@@ -104,7 +104,7 @@ export function ChatArea() {
           /* ── Empty state: full-center arc reactor ── */
           <div className="flex flex-col items-center justify-center h-full px-4 select-none">
             <div style={{ marginBottom: 32, position: 'relative' }}>
-              <ArcReactor size={260} streaming={streamState.isStreaming} audioData={ttsAudioData} />
+              <PresenceCore size={260} />
               {/* Greeting floats below the reactor */}
             </div>
 
@@ -195,6 +195,7 @@ export function ChatArea() {
               <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}K</kbd> COMMANDS</span>
               <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}I</kbd> SYSTEM PANEL</span>
               <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}SPACE</kbd> OVERLAY</span>
+              <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}J</kbd> COMPANION</span>
             </div>
           </div>
         ) : (
@@ -207,13 +208,13 @@ export function ChatArea() {
                 top: '50%',
                 left: '50%',
                 transform: 'translate(-50%, -50%)',
-                opacity: streamState.isStreaming || ttsSpeaking ? 0.22 : 0.07,
+                opacity: presence === 'idle' ? 0.07 : 0.22,
                 pointerEvents: 'none',
                 zIndex: 0,
                 transition: 'opacity 1s ease',
               }}
             >
-              <ArcReactor size={340} streaming={streamState.isStreaming || ttsSpeaking} audioData={ttsAudioData} />
+              <PresenceCore size={340} />
             </div>
 
             <div className="relative z-10 max-w-[var(--chat-max-width)] mx-auto px-4 py-6">

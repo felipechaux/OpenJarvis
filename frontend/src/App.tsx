@@ -8,6 +8,7 @@ import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
 import { LogsPage } from './pages/LogsPage';
+import { CompanionPage } from './pages/CompanionPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
@@ -15,6 +16,7 @@ import { useAppStore } from './lib/store';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
 import { OptInModal } from './components/OptInModal';
 import { useWakeWord } from './hooks/useWakeWord';
+import { useCompanionMode } from './hooks/useCompanionMode';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -152,6 +154,7 @@ export default function App() {
 
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   useWakeWord(setupDone && speechEnabled);
+  useCompanionMode({ registerShortcut: setupDone });
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -214,6 +217,7 @@ export default function App() {
           <Route path="agents" element={<AgentsPage />} />
           <Route path="logs" element={<LogsPage />} />
         </Route>
+        <Route path="companion" element={<CompanionPage />} />
       </Routes>
       <Toaster position="bottom-right" />
       {commandPaletteOpen && <CommandPalette />}

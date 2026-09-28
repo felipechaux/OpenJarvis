@@ -205,7 +205,105 @@ button {
   pointer-events: none;
 }
 
+/* ─── PRESENCE CORE ──────────────────────────────────────────────────────── */
+/* The reactor as a living presence — see PresenceCore.tsx. */
+.presence-core {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.presence-reactor {
+  transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+@keyframes presence-breathe {
+  0%, 100% { transform: scale(1);     opacity: 0.88; }
+  50%      { transform: scale(1.035); opacity: 1; }
+}
+.presence-idle .presence-reactor {
+  animation: presence-breathe 5.5s ease-in-out infinite;
+}
+.presence-listening .presence-reactor {
+  transform: scale(calc(1.02 + var(--mic-level, 0) * 0.06));
+}
+.presence-halo,
+.presence-scan {
+  position: absolute;
+  inset: -6%;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+.presence-halo {
+  border: 1px solid rgba(0, 212, 255, 0.5);
+  box-shadow: 0 0 40px rgba(0, 212, 255, 0.25), inset 0 0 30px rgba(0, 212, 255, 0.12);
+  transform: scale(calc(0.92 + var(--mic-level, 0) * 0.18));
+}
+.presence-listening .presence-halo {
+  opacity: calc(0.35 + var(--mic-level, 0) * 0.65);
+}
+@keyframes presence-orbit { to { transform: rotate(360deg); } }
+.presence-scan {
+  background: conic-gradient(from 0deg, transparent 0deg, rgba(0, 212, 255, 0.28) 40deg, transparent 80deg);
+  -webkit-mask: radial-gradient(circle, transparent 62%, #000 63%, #000 70%, transparent 71%);
+  mask: radial-gradient(circle, transparent 62%, #000 63%, #000 70%, transparent 71%);
+  animation: presence-orbit 1.4s linear infinite;
+}
+.presence-thinking .presence-scan {
+  opacity: 1;
+}
+
+/* ─── COMPANION MODE ─────────────────────────────────────────────────────── */
+.companion-status {
+  margin-top: 10px;
+  font-family: var(--font-hud);
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  color: var(--color-text-tertiary);
+  transition: color 0.4s ease, text-shadow 0.4s ease;
+}
+.companion-status-listening,
+.companion-status-speaking {
+  color: var(--color-accent);
+  text-shadow: 0 0 12px var(--color-accent-glow);
+}
+@keyframes companion-status-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.companion-status-thinking {
+  color: var(--color-text-secondary);
+  animation: companion-status-blink 1.2s ease-in-out infinite;
+}
+.companion-exchange {
+  font-size: 0.8rem;
+  line-height: 1.55;
+  -webkit-mask: linear-gradient(to bottom, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+  mask: linear-gradient(to bottom, transparent, #000 14px, #000 calc(100% - 14px), transparent);
+}
+.companion-user {
+  padding-top: 10px;
+  color: var(--color-text-tertiary);
+  text-align: right;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.companion-reply {
+  margin-top: 8px;
+  padding-bottom: 10px;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  animation: jarvis-msg-in 0.35s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  .companion-status-thinking,
+  .presence-reactor,
+  .presence-scan,
   .jarvis-page,
   .jarvis-send-ready,
   .titlebar::after {

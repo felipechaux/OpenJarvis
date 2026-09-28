@@ -43,6 +43,44 @@ const VAD_TICK_MS = 80;
 // progress (RMS, speechStarted, elapsed) when debugging "the mic opened
 // but never closed" bugs in WKWebView.
 const VAD_LOG_EVERY_N_TICKS = 12;
+// RMS that maps to a full-scale mic level (normal voice ≈ 0.05-0.15).
+const METER_FULL_SCALE_RMS = 0.18;
+
+/// Publish a smoothed 0..1 mic level to the store while recording so
+/// presence visuals can follow the user's voice.  Independent of the VAD
+/// so it also runs for manual (click-to-talk) recordings.
+function startMicMeter(stream: MediaStream): () => void {
+  const setMicLevel = useAppStore.getState().setMicLevel;
+  const ctx = new AudioContext();
+  ctx.resume().catch(() => {});
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 512;
+  source.connect(analyser);
+  const buffer = new Uint8Array(analyser.fftSize);
+  let level = 0;
+  let raf = 0;
+  const loop = () => {
+    analyser.getByteTimeDomainData(buffer);
+    let sumSquares = 0;
+    for (let i = 0; i < buffer.length; i++) {
+      const sample = (buffer[i] - 128) / 128;
+      sumSquares += sample * sample;
+    }
+    const target = Math.min(Math.sqrt(sumSquares / buffer.length) / METER_FULL_SCALE_RMS, 1);
+    // Fast attack, slow release so the visual doesn't flicker between words.
+    level += (target - level) * (target > level ? 0.5 : 0.12);
+    setMicLevel(level);
+    raf = requestAnimationFrame(loop);
+  };
+  raf = requestAnimationFrame(loop);
+  return () => {
+    cancelAnimationFrame(raf);
+    try { source.disconnect(); } catch {}
+    ctx.close().catch(() => {});
+    setMicLevel(0);
+  };
+}
 
 export function useSpeech() {
   const [state, setState] = useState<SpeechState>('idle');
@@ -52,6 +90,19 @@ export function useSpeech() {
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const vadCleanupRef = useRef<(() => void) | null>(null);
+  const meterCleanupRef = useRef<(() => void) | null>(null);
+
+  const stopMeter = useCallback(() => {
+    meterCleanupRef.current?.();
+    meterCleanupRef.current = null;
+  }, []);
+
+  // Mirror capture state into the store for presence visuals.
+  useEffect(() => {
+    useAppStore.getState().setSpeechState(state);
+  }, [state]);
+
+  useEffect(() => stopMeter, [stopMeter]);
 
   // Check if speech backend is available on mount
   useEffect(() => {
@@ -66,6 +117,7 @@ export function useSpeech() {
 
     return new Promise((resolve, reject) => {
       recorder.onstop = async () => {
+        stopMeter();
         setState('transcribing');
 
         // Stop all audio tracks
@@ -115,7 +167,7 @@ export function useSpeech() {
         recorder.onstop?.(new Event('stop'));
       }
     });
-  }, []);
+  }, [stopMeter]);
 
   const startRecording = useCallback(async (options: StartRecordingOptions = {}): Promise<void> => {
     setError(null);
@@ -139,6 +191,8 @@ export function useSpeech() {
       recorder.start();
       mediaRecorderRef.current = recorder;
       setState('recording');
+      stopMeter();
+      meterCleanupRef.current = startMicMeter(stream);
 
       if (options.autoStop) {
         // Voice Activity Detection: stop automatically after the user
@@ -286,10 +340,11 @@ export function useSpeech() {
         vadCleanupRef.current = cleanup;
       }
     } catch {
+      stopMeter();
       setError('Microphone access denied');
       setState('idle');
     }
-  }, [finalizeRecording]);
+  }, [finalizeRecording, stopMeter]);
 
   const stopRecording = useCallback(async (): Promise<string> => {
     // If VAD was running, cancel it — we're stopping manually.
