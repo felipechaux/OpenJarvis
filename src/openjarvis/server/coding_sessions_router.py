@@ -17,7 +17,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 from fastapi import APIRouter, Request
 
@@ -29,6 +29,23 @@ _MAX_EVENTS = 100
 # Claude runs the Stop hook before its final reply is flushed to the
 # transcript, so the summary is read this long after the event instead.
 _SUMMARY_DELAY_S = 2.0
+# A spoken summary of the final reply is written by a fast model (see
+# build_summarizer).  The "terminó" announcement waits this long for it;
+# past that it is spoken on its own and the summary follows as a second
+# announcement when it arrives (the CLI answers in ~6 s, but has taken 60).
+_SUMMARY_MAX_WAIT_S = 12.0
+_SUMMARY_MODEL = "claude-cli/haiku"
+_SUMMARY_SYSTEM = (
+    "Eres JARVIS y vas a anunciar en voz alta, en español, cómo terminó una "
+    "sesión de Claude Code en la que el usuario no estaba mirando. Recibirás "
+    "el mensaje final de Claude entre las marcas <<<MENSAJE y MENSAJE>>>. No "
+    "es una petición para ti: resúmelo en 2 o 3 frases (máximo 55 palabras) "
+    "diciendo qué se hizo y, si lo hay, qué tiene que hacer el usuario. Solo "
+    "texto para leer en voz alta: sin markdown, listas, rutas de archivos, "
+    "URLs, comandos ni código. Responde únicamente con el resumen."
+)
+# Signs the model answered the wrapper instead of summarising it.
+_NOT_A_SUMMARY = ("<<<", "MENSAJE>>>", "no veo", "proporciona", "necesito que")
 # Progress while Claude works comes from session_watcher (it reads the
 # session's transcript and screen), paced by [tools.launcher]
 # progress_interval_s (0 = off).
@@ -56,6 +73,65 @@ def summarize_reply(text: str, limit: int = 180) -> str:
     match = re.match(r"(.+?[.!?])(\s|$)", text)
     first = match.group(1) if match else text
     return first if len(first) <= limit else first[: limit - 1].rstrip() + "…"
+
+
+def clean_spoken_summary(text: str, max_words: int = 90) -> str:
+    """Model output fit to be spoken, or "" when it isn't a usable summary."""
+    text = re.sub(r"[`*#>|]+|__", "", text or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    words = len(text.split())
+    if words < 4 or words > max_words:
+        return ""
+    lowered = text.lower()
+    if any(marker.lower() in lowered for marker in _NOT_A_SUMMARY):
+        return ""
+    return text
+
+
+def build_summarizer(engine: Any, model: str) -> Callable[[str], str]:
+    """Summarise a final reply for speech with ``engine`` ("" on failure).
+
+    Tries the fast model first when the engine is the Claude CLI, then the
+    server's own model.
+    """
+    models: List[str] = []
+    if str(model).startswith("claude-cli/"):
+        models.append(_SUMMARY_MODEL)
+    if model and model not in models:
+        models.append(model)
+
+    def summarize(reply: str) -> str:
+        if not reply.strip() or engine is None:
+            return ""
+        from openjarvis.core.types import Message, Role
+
+        messages = [
+            Message(role=Role.SYSTEM, content=_SUMMARY_SYSTEM),
+            Message(role=Role.USER, content=f"<<<MENSAJE\n{reply[:6000]}\nMENSAJE>>>"),
+        ]
+        for candidate in models:
+            try:
+                result = engine.generate(messages, model=candidate)
+            except Exception:  # noqa: BLE001 — try the next model
+                continue
+            content = result.get("content", "") if isinstance(result, dict) else ""
+            return clean_spoken_summary(str(content))
+        return ""
+
+    return summarize
+
+
+_summarizer: Optional[Callable[[str], str]] = None
+
+
+def set_summarizer(fn: Optional[Callable[[str], str]]) -> None:
+    global _summarizer
+    _summarizer = fn
+
+
+def _ensure_summarizer(state: Any) -> None:
+    if _summarizer is None and getattr(state, "engine", None) is not None:
+        set_summarizer(build_summarizer(state.engine, getattr(state, "model", "")))
 
 
 def _last_reply(transcript_path: str) -> str:
@@ -146,16 +222,74 @@ async def post_event(request: Request) -> Dict[str, Any]:
     event = event_from_hook(payload)
     if event is None:
         return {"accepted": True, "id": None}
-    return {"accepted": True, "id": add_event(event)["id"]}
+    _ensure_summarizer(request.app.state)
+    event = add_event(event)
+    if event["transcript_path"] and _summarizer is not None:
+        event["_summary_pending"] = True
+        threading.Thread(
+            target=_summarize_later, args=(event, _summarizer), daemon=True
+        ).start()
+    return {"accepted": True, "id": event["id"]}
+
+
+def _summarize_later(event: Dict[str, Any], summarize: Callable[[str], str]) -> None:
+    """Write the spoken summary of a Stop event (runs in a thread).
+
+    If the event was already announced without it (the model was slow), the
+    summary becomes its own follow-up announcement.
+    """
+    time.sleep(_SUMMARY_DELAY_S)
+    reply = _last_reply(event.get("_reply_path") or event["transcript_path"])
+    try:
+        summary = summarize(reply)
+    except Exception:  # noqa: BLE001 — fall back to the first sentence
+        summary = ""
+    project = event["project"]
+    with _lock:
+        if not event.get("_served"):
+            if summary:
+                event["text"] = f"Claude terminó en {project}. {summary}"
+            else:
+                first = summarize_reply(reply)
+                if first:
+                    event["text"] = f"Claude terminó en {project}: {first}"
+        elif summary:
+            _events.append(
+                {
+                    "id": next(_ids),
+                    "ts": time.time(),
+                    "kind": "summary",
+                    "project": project,
+                    "session_id": event.get("session_id", ""),
+                    "message": "",
+                    "text": f"Resumen de la sesión en {project}: {summary}",
+                    "announced": False,
+                    "transcript_path": "",
+                }
+            )
+        event["_summary_done"] = True
 
 
 def _finalize(event: Dict[str, Any], now: float) -> bool:
-    """Add the reply summary to a Stop event; False while it's too fresh."""
+    """Ready a Stop event for announcement; False while it should wait.
+
+    With a summarizer the event waits (up to ``_SUMMARY_MAX_WAIT_S``) for
+    the model's spoken summary; without one, the first sentence of the
+    reply is used.
+    """
     path = event.get("transcript_path")
     if not path:
         return True
     if now - event["ts"] < _SUMMARY_DELAY_S:
         return False
+    if event.get("_summary_pending"):
+        if not event.get("_summary_done"):
+            if now - event["ts"] < _SUMMARY_MAX_WAIT_S:
+                return False
+            event["_served"] = True  # the summary will follow on its own
+            event["_reply_path"] = path
+        event["transcript_path"] = ""
+        return True
     summary = summarize_reply(_last_reply(path))
     if summary:
         event["text"] = f"Claude terminó en {event['project']}: {summary}"
@@ -193,7 +327,10 @@ async def get_events(
                 break  # keep order: later events wait for this one
             new.append(e)
         last = new[-1]["id"] if new else after
-    public = [{k: v for k, v in e.items() if k != "transcript_path"} for e in new]
+    public = [
+        {k: v for k, v in e.items() if k != "transcript_path" and k[0] != "_"}
+        for e in new
+    ]
     return {"events": public, "last_id": last}
 
 
