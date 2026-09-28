@@ -19,6 +19,7 @@ export function ChatPage() {
   const addMessage = useAppStore((s) => s.addMessage);
   const updateLastAssistant = useAppStore((s) => s.updateLastAssistant);
   const selectedModel = useAppStore((s) => s.selectedModel);
+  const modelsLoading = useAppStore((s) => s.modelsLoading);
   const setStreamState = useAppStore((s) => s.setStreamState);
   const resetStream = useAppStore((s) => s.resetStream);
   const ttsEnabled = useAppStore((s) => s.settings.ttsEnabled);
@@ -37,7 +38,9 @@ export function ChatPage() {
   }, [ttsAudioData, setTTSAudioData]);
 
   useEffect(() => {
-    if (_greetingComplete || !selectedModel) return;
+    // Wait for App to reconcile the saved model with the server default;
+    // otherwise the greeting fires with a stale localStorage selection.
+    if (_greetingComplete || !selectedModel || modelsLoading) return;
 
     const controller = new AbortController();
 
@@ -70,18 +73,20 @@ export function ChatPage() {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
       });
-      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: DEBES llamar a 'get_weather' y 'digest_collect' (sources: ['gcalendar', 'gmail']) inmediatamente.
+      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: DEBES llamar a 'digest_collect' (sources: ['gcalendar', 'gmail', 'weather']) inmediatamente. No existe ninguna herramienta 'get_weather': el clima llega por la fuente 'weather'.
 Formato: Reporta CADA correo y evento de calendario que aparezca en las salidas de las herramientas. Saluda al usuario como "señor Chaux".
 Hora local: ${localTime}.
 
 INSTRUCCIONES DE BRIEFING:
-- Enumera todos los correos sin leer que devuelva la herramienta.
-- Enumera todos los eventos próximos para hoy y mañana.
-- Menciona el impacto del clima de Bogotá en la agenda.
+- Cada correo trae su pestaña de Gmail ([tab: Primary|Updates|Promotions|Social|Forums]) y su antigüedad ("2h ago"). Primero detalla los de Primary. De Updates/Promotions/Social menciona solo lo realmente relevante (empleo, seguridad de la cuenta, pagos) diciendo en qué pestaña están, y resume el resto con un conteo, sin enumerarlos.
+- Usa la antigüedad exactamente como la da la herramienta; no la recalcules ni la inventes.
+- Enumera todos los eventos de HOY y de MAÑANA con su hora exacta tal como la da la herramienta (marcados "Today"/"Tomorrow"); los de días posteriores solo si son relevantes.
+- Si hay datos de clima, menciona su impacto en la agenda.
 
 REGLAS ABSOLUTAS:
-- DEBES reportar los correos específicos encontrados. NUNCA digas que faltan datos si las herramientas los devolvieron.
+- NUNCA digas que faltan datos si las herramientas los devolvieron.
 - CERO ALUCINACIÓN. Si una herramienta falla, dilo claramente.
+- Si la salida incluye "CONNECTION ERRORS", di explícitamente qué servicio está desconectado y que debe reconectarse en Data Sources. NUNCA lo presentes como "no hay eventos" o "no hay correos".
 - Mantente en personaje como JARVIS.
 - Responde TODO en español, con un tono británico formal traducido al castellano (trata al usuario de "usted").`;
 
@@ -168,7 +173,7 @@ REGLAS ABSOLUTAS:
       resetStream();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedModel]);
+  }, [selectedModel, modelsLoading]);
 
   return (
     <div className="flex h-full overflow-hidden">

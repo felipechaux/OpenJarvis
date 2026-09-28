@@ -181,3 +181,28 @@ def test_registry() -> None:
     assert ConnectorRegistry.contains("gcalendar")
     cls = ConnectorRegistry.get("gcalendar")
     assert cls.connector_id == "gcalendar"
+
+
+def test_parse_event_timestamp_all_day() -> None:
+    from datetime import datetime
+
+    from openjarvis.connectors.gcalendar import _parse_event_timestamp
+
+    ts = _parse_event_timestamp({"start": {"date": "2026-09-28"}})
+    assert ts == datetime(2026, 9, 28)
+
+
+def test_events_list_escapes_calendar_id() -> None:
+    """Holiday calendar ids contain '#', which must not become a fragment."""
+    from unittest.mock import MagicMock, patch
+
+    from openjarvis.connectors.gcalendar import _gcal_api_events_list
+
+    resp = MagicMock()
+    resp.json.return_value = {"items": []}
+    with patch("httpx.get", return_value=resp) as mock_get:
+        _gcal_api_events_list("tok", "en.co#holiday@group.v.calendar.google.com")
+
+    url = mock_get.call_args.args[0]
+    assert "#" not in url
+    assert "en.co%23holiday%40group.v.calendar.google.com/events" in url

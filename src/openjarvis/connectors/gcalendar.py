@@ -7,8 +7,9 @@ to make them trivially mockable in tests.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterator, List, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -105,7 +106,10 @@ def _gcal_api_events_list(
         params["timeMax"] = time_max
 
     resp = httpx.get(
-        f"{_GCAL_API_BASE}/calendars/{calendar_id}/events",
+        # Calendar ids can contain "#" (e.g. "en.co#holiday@group.v.calendar.
+        # google.com"); unescaped, the rest of the id becomes a URL fragment
+        # and the API answers 404, silently dropping that calendar.
+        f"{_GCAL_API_BASE}/calendars/{quote(calendar_id, safe='')}/events",
         headers={"Authorization": f"Bearer {token}"},
         params=params,
         timeout=30.0,
@@ -178,7 +182,12 @@ def _parse_event_timestamp(event: Dict[str, Any]) -> datetime:
     start = event.get("start", {})
     date_time_str: str = start.get("dateTime", "")
     if not date_time_str:
-        return datetime.now()
+        # All-day events only carry a ``date`` — local midnight of that day.
+        # Falling back to now() made them look like "today, right now".
+        try:
+            return datetime.fromisoformat(start["date"])
+        except (KeyError, ValueError, TypeError):
+            return datetime.now()
     try:
         # RFC3339 — Python 3.11+ fromisoformat handles the trailing 'Z'.
         # For older versions we replace 'Z' with '+00:00'.
@@ -306,10 +315,15 @@ class GCalendarConnector(BaseConnector):
         # Default to 24 hours ago so we don't dump the entire calendar history
         if since is None:
             since = datetime.now() - timedelta(days=1)
-        time_min = since.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # The API wants RFC 3339 in UTC.  ``since`` is usually naive local
+        # time; astimezone() treats naive values as local, so e.g. Bogotá
+        # (UTC-5) no longer gets a window shifted by five hours.
+        time_min = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
         # Limit to the next 7 days from now to avoid overwhelming context
-        time_max = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%dT23:59:59Z")
+        time_max = (datetime.now(timezone.utc) + timedelta(days=7)).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
         synced = 0
 
         for calendar in calendars:
@@ -362,6 +376,7 @@ class GCalendarConnector(BaseConnector):
                         metadata={
                             "calendar_id": calendar_id,
                             "event_id": evt_id,
+                            "all_day": "dateTime" not in event.get("start", {}),
                         },
                     )
                     synced += 1

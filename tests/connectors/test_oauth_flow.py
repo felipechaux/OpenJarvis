@@ -144,3 +144,35 @@ def test_gdrive_auth_url_returns_consent_url_with_client_id(
     url = conn.auth_url()
     assert "accounts.google.com" in url
     assert "test-id.apps.googleusercontent.com" in url
+
+
+def test_get_valid_google_token_returns_none_when_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    """An expired token whose refresh is rejected must not look connected."""
+    import json
+
+    import httpx
+
+    from openjarvis.connectors.oauth import get_valid_google_token
+
+    creds = tmp_path / "gcalendar.json"
+    creds.write_text(
+        json.dumps(
+            {
+                "access_token": "stale",
+                "refresh_token": "1//revoked",
+                "client_id": "id",
+                "client_secret": "secret",
+                "expires_at": 1,
+            }
+        )
+    )
+    request = httpx.Request("POST", "https://oauth2.googleapis.com/token")
+    response = httpx.Response(400, json={"error": "invalid_grant"}, request=request)
+    error = httpx.HTTPStatusError("400", request=request, response=response)
+
+    with patch(
+        "openjarvis.connectors.oauth.refresh_google_token", side_effect=error
+    ):
+        assert get_valid_google_token(str(creds)) is None

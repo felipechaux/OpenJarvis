@@ -61,11 +61,19 @@ def _format_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
+def _to_local_naive(ts: datetime) -> datetime:
+    """Convert an aware timestamp to naive *local* time.
+
+    Dropping ``tzinfo`` without converting treated e.g. 20:29 UTC as 20:29
+    Bogotá time, so a 4-hour-old email read as "30m ago" or "just now".
+    """
+    return ts.astimezone().replace(tzinfo=None) if ts.tzinfo else ts
+
+
 def _time_ago(ts: datetime) -> str:
     """Return a human-readable relative time like '2h ago' or '15m ago'."""
     now = datetime.now()
-    ts_naive = ts.replace(tzinfo=None) if ts.tzinfo else ts
-    delta = now - ts_naive
+    delta = now - _to_local_naive(ts)
     total_seconds = max(0, int(delta.total_seconds()))
     if total_seconds < 60:
         return "just now"
@@ -80,7 +88,7 @@ def _time_ago(ts: datetime) -> str:
 def _format_date(ts: datetime) -> str:
     """Format a datetime as 'Today', 'Tomorrow', or 'April 1' style."""
     now = datetime.now()
-    ts_date = ts.date()
+    ts_date = _to_local_naive(ts).date()
     today = now.date()
     tomorrow = today + timedelta(days=1)
     yesterday = today - timedelta(days=1)
@@ -182,6 +190,24 @@ def _format_strava(doc: Document) -> str:
     return f"[strava] {doc.title}"
 
 
+# Gmail's inbox tabs.  Without them the model presents Promotions/Updates mail
+# as if it were in the user's Primary inbox, which looks invented to the user.
+_GMAIL_TABS = {
+    "CATEGORY_PERSONAL": "Primary",
+    "CATEGORY_UPDATES": "Updates",
+    "CATEGORY_PROMOTIONS": "Promotions",
+    "CATEGORY_SOCIAL": "Social",
+    "CATEGORY_FORUMS": "Forums",
+}
+
+
+def _gmail_tab(labels: List[str]) -> str:
+    for label in labels:
+        if label in _GMAIL_TABS:
+            return _GMAIL_TABS[label]
+    return "Primary" if "INBOX" in labels else ""
+
+
 def _format_gmail(doc: Document) -> str:
     """Format a Gmail email document."""
     sender = doc.author or "Unknown"
@@ -190,6 +216,9 @@ def _format_gmail(doc: Document) -> str:
     # Include body preview (first 150 chars, single line)
     body = doc.content.replace("\n", " ").strip()[:150] if doc.content else ""
     line = f'[gmail] From: {sender} — "{subject}" ({ago})'
+    tab = _gmail_tab(doc.metadata.get("labels") or [])
+    if tab:
+        line += f" [tab: {tab}]"
     if body:
         line += f"\n  Preview: {body}"
     return line
@@ -270,8 +299,16 @@ def _format_notion(doc: Document) -> str:
 def _format_gcalendar(doc: Document) -> str:
     """Format a Google Calendar event document."""
     title = doc.title or "(No title)"
-    date_str = _format_date(doc.timestamp)
-    time_str = _format_time(doc.timestamp)
+    ts = doc.timestamp
+    # Event times arrive in the event's own zone (often UTC); show them in
+    # the user's local time so "Today 9:00 AM" means their 9 AM.
+    if ts.tzinfo is not None:
+        ts = ts.astimezone().replace(tzinfo=None)
+    date_str = _format_date(ts)
+    if doc.metadata.get("all_day"):
+        time_str = "(all day)"
+    else:
+        time_str = _format_time(ts)
     # Try to extract duration from content
     duration_match = (
         re.search(r"When:\s*(.+?)$", doc.content, re.MULTILINE) if doc.content else None
@@ -459,10 +496,12 @@ class DigestCollectTool(BaseTool):
         # Collect raw documents per source
         collected_docs: Dict[str, List[Document]] = {}
         errors: List[str] = []
+        failed_sources: set = set()
 
         for source in sources:
             if not ConnectorRegistry.contains(source):
                 errors.append(f"Connector '{source}' not available")
+                failed_sources.add(source)
                 continue
 
             try:
@@ -471,8 +510,12 @@ class DigestCollectTool(BaseTool):
 
                 if not connector.is_connected():
                     errors.append(
-                        f"Connector '{source}' not connected (no credentials)"
+                        f"Connector '{source}' not connected: credentials are "
+                        "missing or the authorization expired. The user must "
+                        "reconnect it in Data Sources "
+                        f"(or run `jarvis connect {source}`)."
                     )
+                    failed_sources.add(source)
                     continue
 
                 # Cap per-source to avoid overwhelming the LLM context
@@ -486,6 +529,7 @@ class DigestCollectTool(BaseTool):
                 collected_docs[source] = docs
             except Exception as exc:
                 errors.append(f"Error fetching from '{source}': {exc}")
+                failed_sources.add(source)
 
         # Group by section and build human-readable output
         summary_parts: List[str] = []
@@ -511,7 +555,7 @@ class DigestCollectTool(BaseTool):
                     if docs:
                         for doc in docs:
                             section_lines.append(_format_doc(source, doc))
-                    else:
+                    elif source not in failed_sources:
                         empty_sources.append(source)
 
             if section_lines or empty_sources:
@@ -538,8 +582,16 @@ class DigestCollectTool(BaseTool):
                 if docs:
                     for doc in docs:
                         summary_parts.append(_format_doc(source, doc))
-                else:
+                elif source not in failed_sources:
                     summary_parts.append(f"[{source}] (No recent data found)")
+            summary_parts.append("")
+
+        # Surface failures in the text the model reads.  Metadata alone is
+        # invisible to the LLM, which then reports a dead connector as
+        # "no events today" instead of telling the user to reconnect it.
+        if errors:
+            summary_parts.append("=== CONNECTION ERRORS (data NOT retrieved) ===")
+            summary_parts.extend(f"- {err}" for err in errors)
             summary_parts.append("")
 
         return ToolResult(

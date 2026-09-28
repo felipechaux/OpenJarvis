@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlencode
 
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Connector credentials directory
@@ -386,8 +389,24 @@ def get_valid_google_token(credentials_path: str) -> Optional[str]:
             
         return new_access_token
     except Exception as e:
-        print(f"Failed to refresh token: {e}")
-        return access_token
+        # The access token is past expiry, so handing it back would only turn
+        # into a 401 later — and make ``is_connected()`` report a dead
+        # connection as healthy.  ``invalid_grant`` means the refresh token
+        # was revoked/expired (OAuth consent screen in "Testing" mode expires
+        # them after 7 days): the user must re-authorize.
+        detail = ""
+        response = getattr(e, "response", None)
+        if response is not None:
+            try:
+                detail = response.json().get("error", "")
+            except Exception:
+                detail = response.text[:200]
+        logger.warning(
+            "Google token refresh failed for %s (%s); re-authorization needed",
+            credentials_path,
+            detail or e,
+        )
+        return None
 
 
 def run_oauth_flow(
