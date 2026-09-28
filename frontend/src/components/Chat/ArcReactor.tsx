@@ -1,380 +1,407 @@
-import { useMemo } from 'react';
+import { useEffect, useId, useMemo, useRef, type ReactNode } from 'react';
 import type { AudioAnalyzerData } from '../../hooks/useTTS';
+import type { Presence } from '../../hooks/usePresence';
 
 interface ArcReactorProps {
   size?: number;
   streaming?: boolean;
   audioData?: AudioAnalyzerData;
+  /// Per-frame audio source, read inside the draw loop so callers don't have
+  /// to re-render every frame. Takes precedence over `audioData`.
+  getAudioData?: () => AudioAnalyzerData | undefined;
+  /// Explicit presence state; inferred from `streaming`/audio when omitted.
+  presence?: Presence;
   className?: string;
 }
 
+/// The JARVIS HUD core.
+///
+/// Layout (all geometry in a 200×200 viewBox, so every size shares it):
+///   - static rings live in separate <svg> layers, each rotated by CSS on its
+///     own composited <div> — constant rotation never repaints the SVG;
+///   - a single <canvas> draws the voice-driven waveform ring (speaking) or
+///     the mic ripple + level gauge (listening) from a rAF loop that only
+///     runs while there's audio to show;
+///   - the loop writes `--level` on the root for the CSS core/halo, so
+///     nothing re-renders in React per frame.
 export function ArcReactor({
   size = 260,
   streaming = false,
   audioData,
+  getAudioData,
+  presence,
+  className = '',
 }: ArcReactorProps) {
-  const cx = size / 2;
-  const cy = size / 2;
+  const mode: Presence = presence ?? (streaming ? 'thinking' : audioData ? 'speaking' : 'idle');
+  const compact = size < 220;
+  const uid = useId().replace(/[^a-zA-Z0-9_-]/g, '');
 
-  // Calculate voice-reactive values
-  const voiceIntensity = audioData?.averageLevel ?? 0;
-  const bassIntensity = audioData?.bassLevel ?? 0;
-  const trebleIntensity = audioData?.trebleLevel ?? 0;
-  const isVoiceActive = voiceIntensity > 0.05;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const audioRef = useRef(audioData);
+  audioRef.current = audioData;
+  const getterRef = useRef(getAudioData);
+  getterRef.current = getAudioData;
+  // What the canvas last drew, so a fade-out keeps the same shape.
+  const lastModeRef = useRef<Presence>('idle');
 
-  // Dynamic speed based on streaming and voice
-  const baseSpeed = streaming ? 0.45 : 1;
-  const voiceSpeedMultiplier = 1 + voiceIntensity * 2; // Speed up when voice is loud
-  const speed = baseSpeed / voiceSpeedMultiplier;
+  const layers = useMemo(() => <HudLayers uid={uid} compact={compact} />, [uid, compact]);
 
-  // Dynamic glow intensity based on voice
-  const glowIntensity = isVoiceActive
-    ? 0.5 + voiceIntensity * 0.5 // Boost glow when speaking
-    : streaming ? 0.4 : 0.25;
+  // ── Voice canvas loop ──
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const root = rootRef.current;
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !root || !ctx) return;
 
-  const glow = useMemo(() => {
-    const baseGlow = streaming || isVoiceActive
-      ? `drop-shadow(0 0 18px rgba(0,212,255,${0.7 + voiceIntensity * 0.3})) drop-shadow(0 0 40px rgba(0,212,255,${0.4 + voiceIntensity * 0.4}))`
-      : `drop-shadow(0 0 8px rgba(0,212,255,0.5)) drop-shadow(0 0 20px rgba(0,212,255,0.25))`;
-    return baseGlow;
-  }, [streaming, isVoiceActive, voiceIntensity]);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = Math.round(size * dpr);
+    canvas.height = Math.round(size * dpr);
+    const unit = (size * dpr) / 200;
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const active = mode === 'speaking' || mode === 'listening';
+    if (active) lastModeRef.current = mode;
+    const drawMode = lastModeRef.current;
 
-  // Core pulse speed based on voice
-  const corePulseSpeed = isVoiceActive ? 0.6 / (1 + voiceIntensity) : 1.8;
+    const POINTS = 96;
+    const smooth = new Float32Array(POINTS);
+    let level = 0;
+    let vis = 0;
+    let lastLevelVar = -1;
+    let raf = 0;
+    const t0 = performance.now();
 
-  // Hexagon points (flat-top) centered at cx,cy with given radius
-  function hex(r: number): string {
-    return Array.from({ length: 6 }, (_, i) => {
-      const a = (Math.PI / 180) * (60 * i - 30);
-      return `${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`;
-    }).join(' ');
-  }
+    const clear = () => {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    };
 
-  // Triangle points
-  function tri(r: number, rotate = 0): string {
-    return Array.from({ length: 3 }, (_, i) => {
-      const a = (Math.PI / 180) * (120 * i + rotate);
-      return `${cx + r * Math.cos(a)},${cy + r * Math.sin(a)}`;
-    }).join(' ');
-  }
+    const frame = (now: number) => {
+      const t = (now - t0) / 1000;
+      const data = getterRef.current ? getterRef.current() : audioRef.current;
+      const target = active ? Math.min(1, data?.averageLevel ?? 0) : 0;
+      level += (target - level) * (target > level ? 0.45 : 0.12);
+      vis += ((active ? 1 : 0) - vis) * 0.12;
 
-  const s = (base: number) => `${base * speed}s`;
+      if (Math.abs(level - lastLevelVar) > 0.004) {
+        root.style.setProperty('--level', level.toFixed(3));
+        lastLevelVar = level;
+      }
 
-  // Generate frequency bars for voice visualization
-  const frequencyBars = useMemo(() => {
-    if (!audioData?.frequencyData) return null;
+      clear();
+      if (!active && vis < 0.01) {
+        root.style.setProperty('--level', '0');
+        raf = 0;
+        return;
+      }
 
-    const bars = [];
-    const barCount = 8;
-    const radius = cx * 0.95;
-    const maxBarLength = cx * 0.15;
-    const freqData = audioData.frequencyData;
+      ctx.setTransform(unit, 0, 0, unit, 0, 0);
+      ctx.translate(100, 100);
+      ctx.globalAlpha = vis;
 
-    for (let i = 0; i < barCount; i++) {
-      const angle = (Math.PI / 180) * (45 * i - 90); // Start from top
-      // Map frequency data to bars (sample from different parts of frequency spectrum)
-      const freqIndex = Math.floor((i / barCount) * freqData.length * 0.5);
-      const freqValue = freqData[freqIndex] ?? 0;
-      const barLength = (freqValue / 255) * maxBarLength * (1 + voiceIntensity);
+      if (drawMode === 'speaking') {
+        drawWaveform(ctx, data?.frequencyData ?? null, level, smooth, t, reduced);
+      } else {
+        drawListening(ctx, level, t, reduced);
+      }
+      raf = requestAnimationFrame(frame);
+    };
 
-      const x1 = cx + radius * Math.cos(angle);
-      const y1 = cy + radius * Math.sin(angle);
-      const x2 = cx + (radius + barLength) * Math.cos(angle);
-      const y2 = cy + (radius + barLength) * Math.sin(angle);
-
-      bars.push(
-        <line
-          key={`freq-${i}`}
-          x1={x1}
-          y1={y1}
-          x2={x2}
-          y2={y2}
-          stroke="rgba(0,212,255,0.8)"
-          strokeWidth={2 + voiceIntensity * 2}
-          strokeLinecap="round"
-          style={{
-            filter: `drop-shadow(0 0 ${4 + voiceIntensity * 6}px rgba(0,212,255,${0.6 + voiceIntensity * 0.4}))`,
-            opacity: 0.3 + (freqValue / 255) * 0.7,
-          }}
-        />
-      );
-    }
-    return bars;
-  }, [audioData, voiceIntensity, cx, cy]);
-
-  // Inner voice ring pulses
-  const voiceRingRadius = cx * (0.25 + bassIntensity * 0.1);
-  const voiceRingOpacity = 0.3 + voiceIntensity * 0.5;
+    raf = requestAnimationFrame(frame);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [mode, size]);
 
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      style={{ filter: glow, overflow: 'visible' }}
+    <div
+      ref={rootRef}
+      className={`arc-reactor arc-${mode} ${compact ? 'arc-compact' : ''} ${className}`}
+      style={{ width: size, height: size }}
+      aria-hidden="true"
     >
-      {/* ── Ambient glow blob ── */}
-      <radialGradient id="arc-glow" cx="50%" cy="50%" r="50%">
-        <stop
-          offset="0%"
-          stopColor={`rgba(0,212,255,${0.12 + voiceIntensity * 0.25})`}
-        />
-        <stop offset="100%" stopColor="rgba(0,212,255,0)" />
-      </radialGradient>
-      <circle cx={cx} cy={cy} r={cx * 0.95} fill="url(#arc-glow)" />
-
-      {/* ── Voice-reactive frequency bars (outer ring) ── */}
-      {isVoiceActive && frequencyBars}
-
-      {/* ── Ring 1 — outermost, slow CW ── */}
-      <g
-        style={{
-          animation: `jarvis-ring-cw ${s(12)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      >
-        <circle
-          cx={cx}
-          cy={cy}
-          r={cx * 0.88}
-          fill="none"
-          stroke={`rgba(0,212,255,${0.25 + voiceIntensity * 0.3})`}
-          strokeWidth={1 + trebleIntensity}
-          strokeDasharray={`${8 + voiceIntensity * 8} ${6 - voiceIntensity * 3}`}
-        />
-      </g>
-
-      {/* ── Ring 2 — CCW, medium ── */}
-      <g
-        style={{
-          animation: `jarvis-ring-ccw ${s(8)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      >
-        <circle
-          cx={cx}
-          cy={cy}
-          r={cx * 0.78}
-          fill="none"
-          stroke={`rgba(0,212,255,${0.4 + voiceIntensity * 0.35})`}
-          strokeWidth={1.5 + bassIntensity}
-          strokeDasharray={`${18 + voiceIntensity * 10} 4 4 4`}
-        />
-      </g>
-
-      {/* ── Hex frame at ring-2 radius ── */}
-      <polygon
-        points={hex(cx * 0.78)}
-        fill="none"
-        stroke={`rgba(0,212,255,${0.12 + voiceIntensity * 0.2})`}
-        strokeWidth={1 + voiceIntensity}
-      />
-
-      {/* ── Ring 3 — CW, faster ── */}
-      <g
-        style={{
-          animation: `jarvis-ring-cw ${s(5)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      >
-        <circle
-          cx={cx}
-          cy={cy}
-          r={cx * 0.66}
-          fill="none"
-          stroke={`rgba(0,212,255,${0.55 + voiceIntensity * 0.3})`}
-          strokeWidth={1.5 + voiceIntensity}
-          strokeDasharray={`${4 + voiceIntensity * 6} 3`}
-        />
-      </g>
-
-      {/* ── Outer hex bracket lines (spokes) ── */}
-      {Array.from({ length: 6 }, (_, i) => {
-        const a = (Math.PI / 180) * (60 * i - 30);
-        const r1 = cx * 0.66,
-          r2 = cx * 0.78;
-        return (
-          <line
-            key={i}
-            x1={cx + r1 * Math.cos(a)}
-            y1={cy + r1 * Math.sin(a)}
-            x2={cx + r2 * Math.cos(a)}
-            y2={cy + r2 * Math.sin(a)}
-            stroke={`rgba(0,212,255,${0.2 + voiceIntensity * 0.3})`}
-            strokeWidth={1 + voiceIntensity}
-          />
-        );
-      })}
-
-      {/* ── Ring 4 — CCW ── */}
-      <g
-        style={{
-          animation: `jarvis-ring-ccw ${s(7)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      >
-        <circle
-          cx={cx}
-          cy={cy}
-          r={cx * 0.52}
-          fill="none"
-          stroke={`rgba(0,212,255,${0.45 + voiceIntensity * 0.35})`}
-          strokeWidth={2 + voiceIntensity * 1.5}
-          strokeDasharray={`${12 + voiceIntensity * 8} 5 3 5`}
-        />
-      </g>
-
-      {/* ── Inner hex (solid, faint fill) ── */}
-      <polygon
-        points={hex(cx * 0.42)}
-        fill={`rgba(0,212,255,${0.04 + voiceIntensity * 0.1})`}
-        stroke={`rgba(0,212,255,${0.35 + voiceIntensity * 0.4})`}
-        strokeWidth={1.5 + voiceIntensity}
-        style={{
-          animation: `jarvis-ring-cw ${s(20)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      />
-
-      {/* ── Voice-reactive pulse ring ── */}
-      {isVoiceActive && (
-        <circle
-          cx={cx}
-          cy={cy}
-          r={voiceRingRadius}
-          fill="none"
-          stroke={`rgba(0,212,255,${voiceRingOpacity})`}
-          strokeWidth={2 + voiceIntensity * 3}
-          style={{
-            filter: `drop-shadow(0 0 ${8 + voiceIntensity * 12}px rgba(0,212,255,${0.5 + voiceIntensity * 0.5}))`,
-            animation: `jarvis-pulse-ring ${0.3 + (1 - voiceIntensity) * 0.5}s ease-in-out infinite`,
-          }}
-        />
-      )}
-
-      {/* ── Triangle outer (CW) ── */}
-      <polygon
-        points={tri(cx * 0.38)}
-        fill="none"
-        stroke={`rgba(0,212,255,${0.5 + voiceIntensity * 0.3})`}
-        strokeWidth={1.5 + voiceIntensity}
-        style={{
-          animation: `jarvis-ring-cw ${s(4)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      />
-
-      {/* ── Triangle inner (CCW) ── */}
-      <polygon
-        points={tri(cx * 0.26, 60)}
-        fill="none"
-        stroke={`rgba(0,212,255,${0.65 + voiceIntensity * 0.25})`}
-        strokeWidth={1.5 + voiceIntensity * 0.5}
-        style={{
-          animation: `jarvis-ring-ccw ${s(3)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      />
-
-      {/* ── Ring 5 — innermost ring ── */}
-      <g
-        style={{
-          animation: `jarvis-ring-cw ${s(2.5)} linear infinite`,
-          transformOrigin: `${cx}px ${cy}px`,
-        }}
-      >
-        <circle
-          cx={cx}
-          cy={cy}
-          r={cx * (0.19 + bassIntensity * 0.03)}
-          fill="none"
-          stroke={`rgba(0,212,255,${0.7 + voiceIntensity * 0.3})`}
-          strokeWidth={2 + voiceIntensity * 2}
-          strokeDasharray={`${5 + voiceIntensity * 5} 2`}
-        />
-      </g>
-
-      {/* ── Core glow layers ── */}
-      <radialGradient id="core-grad" cx="50%" cy="50%" r="50%">
-        <stop
-          offset="0%"
-          stopColor={`rgba(180,240,255,${0.85 + voiceIntensity * 0.15})`}
-        />
-        <stop
-          offset="35%"
-          stopColor={`rgba(0,212,255,${0.75 + voiceIntensity * 0.25})`}
-        />
-        <stop offset="100%" stopColor="rgba(0,80,180,0)" />
-      </radialGradient>
-      <circle
-        cx={cx}
-        cy={cy}
-        r={cx * (0.13 + bassIntensity * 0.04)}
-        fill="url(#core-grad)"
-        style={{
-          animation: `jarvis-pulse-ring ${corePulseSpeed}s ease-in-out infinite`,
-          filter: isVoiceActive
-            ? `drop-shadow(0 0 ${20 + voiceIntensity * 30}px rgba(0,212,255,${0.6 + voiceIntensity * 0.4}))`
-            : 'none',
-        }}
-      />
-
-      {/* ── Bright center point ── */}
-      <circle
-        cx={cx}
-        cy={cy}
-        r={cx * (0.05 + voiceIntensity * 0.03)}
-        fill={`rgba(255,255,255,${0.8 + voiceIntensity * 0.2})`}
-        style={{
-          filter: isVoiceActive
-            ? `drop-shadow(0 0 ${10 + voiceIntensity * 20}px rgba(255,255,255,${0.5 + voiceIntensity * 0.5}))`
-            : 'none',
-        }}
-      />
-
-      {/* ── 8 tick marks on outer ring ── */}
-      {Array.from({ length: 8 }, (_, i) => {
-        const a = (Math.PI / 180) * (45 * i);
-        const r1 = cx * 0.88,
-          r2 = cx * 0.93 + voiceIntensity * cx * 0.05;
-        return (
-          <line
-            key={i}
-            x1={cx + r1 * Math.cos(a)}
-            y1={cy + r1 * Math.sin(a)}
-            x2={cx + r2 * Math.cos(a)}
-            y2={cy + r2 * Math.sin(a)}
-            stroke={`rgba(0,212,255,${0.4 + voiceIntensity * 0.4})`}
-            strokeWidth={i % 2 === 0 ? 2 + voiceIntensity : 1 + voiceIntensity * 0.5}
-          />
-        );
-      })}
-
-      {/* ── Voice activity indicator arcs ── */}
-      {isVoiceActive && (
-        <g>
-          {Array.from({ length: 3 }, (_, i) => {
-            const radius = cx * (0.6 + i * 0.1);
-            const opacity = voiceIntensity * (0.3 - i * 0.1);
-            return (
-              <circle
-                key={`voice-ring-${i}`}
-                cx={cx}
-                cy={cy}
-                r={radius}
-                fill="none"
-                stroke={`rgba(0,212,255,${opacity})`}
-                strokeWidth={1 + voiceIntensity}
-                strokeDasharray={`${20 + i * 10} ${40 - i * 5}`}
-                style={{
-                  animation: `jarvis-ring-cw ${1 + i * 0.5}s linear infinite`,
-                  transformOrigin: `${cx}px ${cy}px`,
-                }}
-              />
-            );
-          })}
-        </g>
-      )}
-    </svg>
+      <div className="arc-layer arc-ambient" />
+      {/* Listening halo — swells with the user's voice */}
+      <div className="arc-layer arc-halo" />
+      {layers}
+      {/* Thinking scanner — a sweep orbiting the waveform track */}
+      <div className="arc-layer arc-scan" />
+      <canvas ref={canvasRef} className="arc-layer arc-canvas" />
+      <div className="arc-layer arc-core" />
+    </div>
   );
+}
+
+// ── Geometry helpers (viewBox 200, centre 100, 0° = top, clockwise) ──
+
+function polar(r: number, deg: number): [number, number] {
+  const a = ((deg - 90) * Math.PI) / 180;
+  return [100 + r * Math.cos(a), 100 + r * Math.sin(a)];
+}
+
+function arc(r: number, from: number, to: number): string {
+  const [x1, y1] = polar(r, from);
+  const [x2, y2] = polar(r, to);
+  const large = to - from > 180 ? 1 : 0;
+  return `M${x1.toFixed(2)},${y1.toFixed(2)} A${r},${r} 0 ${large} 1 ${x2.toFixed(2)},${y2.toFixed(2)}`;
+}
+
+function ticks(r1: number, r2: number, count: number, every = 1, r2Major = r2): string {
+  let d = '';
+  for (let i = 0; i < count; i++) {
+    const deg = (360 / count) * i;
+    const [x1, y1] = polar(r1, deg);
+    const [x2, y2] = polar(i % every === 0 ? r2Major : r2, deg);
+    d += `M${x1.toFixed(2)},${y1.toFixed(2)}L${x2.toFixed(2)},${y2.toFixed(2)}`;
+  }
+  return d;
+}
+
+// ── Static HUD rings ──
+
+interface SpinProps {
+  /// Seconds per turn at rest.
+  dur: number;
+  /// Seconds per extra turn while thinking.
+  boost: number;
+  ccw?: boolean;
+  className?: string;
+  children: ReactNode;
+}
+
+/// One composited ring layer: base rotation plus a "boost" rotation that only
+/// runs while thinking. Pausing (instead of changing duration) keeps the
+/// angle continuous, so speed changes never jump.
+function Spin({ dur, boost, ccw, className = '', children }: SpinProps) {
+  return (
+    <div
+      className={`arc-layer arc-spin ${ccw ? 'arc-ccw' : ''} ${className}`}
+      style={{ ['--dur' as string]: `${dur}s`, ['--boost' as string]: `${boost}s` }}
+    >
+      <div className="arc-layer arc-boost">
+        <svg viewBox="0 0 200 200" width="100%" height="100%">
+          {children}
+        </svg>
+      </div>
+    </div>
+  );
+}
+
+function HudLayers({ uid, compact }: { uid: string; compact: boolean }) {
+  // Hairlines disappear at companion size — thicken them a touch.
+  const hair = compact ? 0.8 : 0.5;
+  const textPathId = `arc-text-${uid}`;
+  const C = '#00d4ff';
+
+  return (
+    <>
+      {/* Outer tick bezel — slowest */}
+      <Spin dur={200} boost={14} className="arc-dim">
+        <circle cx="100" cy="100" r="98" fill="none" stroke={C} strokeOpacity="0.22" strokeWidth={hair} />
+        <path
+          d={ticks(95, 97.5, compact ? 72 : 120, compact ? 6 : 10, 92.5)}
+          stroke={C}
+          strokeOpacity="0.45"
+          strokeWidth={hair}
+        />
+      </Spin>
+
+      {/* Segmented arc band */}
+      <Spin dur={110} boost={9} ccw>
+        {[[-38, 52], [62, 118], [128, 214], [226, 302]].map(([a, b]) => (
+          <path key={a} d={arc(89, a, b)} fill="none" stroke={C} strokeOpacity="0.55" strokeWidth="2.2" />
+        ))}
+        {[[-38, -30], [110, 118], [226, 234]].map(([a, b]) => (
+          <path key={`c${a}`} d={arc(85.5, a, b)} fill="none" stroke={C} strokeOpacity="0.8" strokeWidth="1.4" />
+        ))}
+      </Spin>
+
+      {/* Readout text + compass labels (hidden at companion size) */}
+      {!compact && (
+        <Spin dur={260} boost={20} className="arc-dim arc-readout">
+          <defs>
+            <path id={textPathId} d={`${arc(81, -150, 170)}`} />
+          </defs>
+          <text className="arc-text" fill={C} fillOpacity="0.55">
+            <textPath href={`#${textPathId}`}>
+              J.A.R.V.I.S · CORE 7.2 · NEURAL LINK STABLE · SPECTRUM 20-8K · LAT 0.02 · SYNC OK
+            </textPath>
+          </text>
+        </Spin>
+      )}
+
+      {/* Waveform baseline track + fixed notches (static) */}
+      <div className="arc-layer">
+        <svg viewBox="0 0 200 200" width="100%" height="100%">
+          <circle cx="100" cy="100" r="72" fill="none" stroke={C} strokeOpacity="0.28" strokeWidth={hair} />
+          <path d={ticks(69, 70.5, 4)} stroke={C} strokeOpacity="0.7" strokeWidth="1" />
+          <circle cx="100" cy="100" r="46" fill="none" stroke={C} strokeOpacity="0.18" strokeWidth={hair} />
+        </svg>
+      </div>
+
+      {/* Dense gear ring */}
+      <Spin dur={48} boost={4} className="arc-dim">
+        <circle
+          cx="100" cy="100" r="62" fill="none" stroke={C} strokeOpacity="0.32"
+          strokeWidth="3.5" strokeDasharray="0.8 2.4"
+        />
+        <circle cx="100" cy="100" r="58.5" fill="none" stroke={C} strokeOpacity="0.45" strokeWidth={hair} />
+      </Spin>
+
+      {/* Heavy arc pair */}
+      <Spin dur={30} boost={3} ccw>
+        <path d={arc(53, 18, 142)} fill="none" stroke={C} strokeOpacity="0.7" strokeWidth="3" />
+        <path d={arc(53, 198, 322)} fill="none" stroke={C} strokeOpacity="0.7" strokeWidth="3" />
+        <path d={arc(53, 150, 160)} fill="none" stroke={C} strokeOpacity="0.4" strokeWidth="3" />
+        <path d={arc(53, 330, 340)} fill="none" stroke={C} strokeOpacity="0.4" strokeWidth="3" />
+      </Spin>
+
+      {/* Inner segmented ring */}
+      <Spin dur={20} boost={2.2}>
+        <circle
+          cx="100" cy="100" r="39" fill="none" stroke={C} strokeOpacity="0.8"
+          strokeWidth="1.6" strokeDasharray={`${(2 * Math.PI * 39) / 12 - 2.4} 2.4`}
+        />
+      </Spin>
+
+      {/* Innermost dashed ring */}
+      <Spin dur={12} boost={1.6} ccw className="arc-dim">
+        <circle
+          cx="100" cy="100" r="32.5" fill="none" stroke={C} strokeOpacity="0.55"
+          strokeWidth="0.9" strokeDasharray="9 3 2 3"
+        />
+      </Spin>
+    </>
+  );
+}
+
+// ── Canvas drawing ──
+
+const TRACK = 72;
+
+/// Circular spectrum: the TTS analyser bins mirrored left/right around the
+/// track so the voice draws a closed, symmetric ring (lows at the top).
+function drawWaveform(
+  ctx: CanvasRenderingContext2D,
+  freq: Uint8Array | number[] | null,
+  level: number,
+  smooth: Float32Array,
+  t: number,
+  reduced: boolean,
+) {
+  const n = smooth.length;
+  // Voice energy sits in the lower bins of the 32-bin analyser.
+  const bins = freq ? Math.min(freq.length - 1, 20) : 0;
+  for (let i = 0; i < n; i++) {
+    const u = i / n; // 0..1 around the circle
+    const m = 1 - Math.abs(u * 2 - 1); // 0 at top → 1 at bottom, mirrored
+    let v: number;
+    if (bins > 1 && freq) {
+      const f = 1 + m * (bins - 1);
+      const lo = Math.floor(f);
+      const hi = Math.min(lo + 1, bins);
+      v = ((freq[lo] ?? 0) + ((freq[hi] ?? 0) - (freq[lo] ?? 0)) * (f - lo)) / 255;
+      v = Math.pow(v, 1.4); // keep quiet bins quiet, let peaks spike
+    } else {
+      // No spectrum available — synthesise movement from the overall level.
+      v = level * (0.55 + 0.45 * Math.sin(i * 0.9 + t * 7) * Math.sin(i * 0.37 - t * 3));
+    }
+    smooth[i] += (v - smooth[i]) * (v > smooth[i] ? 0.6 : 0.2);
+  }
+
+  const outAmp = reduced ? 10 : 20;
+  const inAmp = reduced ? 3 : 7;
+  if (!reduced) ctx.rotate(t * 0.12);
+
+  const outer = (i: number) => TRACK + 0.8 + smooth[i % n] * outAmp;
+  const inner = (i: number) => TRACK - 0.8 - smooth[i % n] * inAmp;
+
+  // Filled band between the outer and inner curves.
+  ctx.beginPath();
+  traceClosed(ctx, n, outer);
+  traceClosed(ctx, n, inner, true);
+  ctx.fillStyle = `rgba(0,212,255,${0.14 + level * 0.18})`;
+  ctx.fill('evenodd');
+
+  // Radial spectral hairlines.
+  ctx.beginPath();
+  for (let i = 0; i < n; i += 2) {
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const r1 = inner(i);
+    const r2 = outer(i) + smooth[i] * 3;
+    ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * r2);
+  }
+  ctx.strokeStyle = 'rgba(0,212,255,0.28)';
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+
+  // Outer line: soft wide pass for glow, then a crisp bright pass.
+  ctx.beginPath();
+  traceClosed(ctx, n, outer);
+  ctx.strokeStyle = `rgba(0,212,255,${0.16 + level * 0.2})`;
+  ctx.lineWidth = 4;
+  ctx.stroke();
+  ctx.strokeStyle = 'rgba(170,240,255,0.95)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.beginPath();
+  traceClosed(ctx, n, inner);
+  ctx.strokeStyle = 'rgba(0,212,255,0.5)';
+  ctx.lineWidth = 0.6;
+  ctx.stroke();
+}
+
+/// Listening: a soft ripple on the track plus twin level gauges on the bezel.
+function drawListening(ctx: CanvasRenderingContext2D, level: number, t: number, reduced: boolean) {
+  const n = 72;
+  const wob = reduced ? 0 : 1;
+  ctx.beginPath();
+  traceClosed(ctx, n, (i) => {
+    const a = (i / n) * Math.PI * 2;
+    return TRACK + level * 7 * (0.55 + 0.45 * wob * Math.sin(3 * a + t * 2.1) * Math.sin(2 * a - t * 1.3));
+  });
+  ctx.strokeStyle = `rgba(0,212,255,${0.18 + level * 0.25})`;
+  ctx.lineWidth = 3;
+  ctx.stroke();
+  ctx.strokeStyle = `rgba(170,240,255,${0.45 + level * 0.5})`;
+  ctx.lineWidth = 0.9;
+  ctx.stroke();
+
+  // Gauges grow out from 3 and 9 o'clock.
+  const span = 0.08 + level * 1.05;
+  ctx.lineCap = 'round';
+  ctx.strokeStyle = `rgba(0,212,255,${0.55 + level * 0.4})`;
+  ctx.lineWidth = 2.4;
+  for (const c of [0, Math.PI]) {
+    ctx.beginPath();
+    ctx.arc(0, 0, 93.5, c - span / 2, c + span / 2);
+    ctx.stroke();
+  }
+  ctx.lineCap = 'butt';
+}
+
+/// Smooth closed curve through `n` polar points (quadratic via midpoints).
+function traceClosed(
+  ctx: CanvasRenderingContext2D,
+  n: number,
+  radius: (i: number) => number,
+  reverse = false,
+) {
+  const pt = (k: number): [number, number] => {
+    const i = reverse ? (n - (k % n)) % n : k % n;
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const r = radius(i);
+    return [Math.cos(a) * r, Math.sin(a) * r];
+  };
+  const [px, py] = pt(0);
+  const [qx, qy] = pt(1);
+  ctx.moveTo((px + qx) / 2, (py + qy) / 2);
+  for (let k = 1; k <= n; k++) {
+    const [cx, cy] = pt(k);
+    const [nx, ny] = pt(k + 1);
+    ctx.quadraticCurveTo(cx, cy, (cx + nx) / 2, (cy + ny) / 2);
+  }
+  ctx.closePath();
 }

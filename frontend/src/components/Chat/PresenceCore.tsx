@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useCallback, useRef } from 'react';
 import { ArcReactor } from './ArcReactor';
 import { useAppStore } from '../../lib/store';
 import { usePresence } from '../../hooks/usePresence';
@@ -9,37 +9,37 @@ interface PresenceCoreProps {
 }
 
 /// The arc reactor as a living presence: breathes while idle, follows the
-/// user's voice while listening, spins up while thinking and rides the TTS
-/// audio while speaking.
+/// user's voice while listening, spins up while thinking and draws the TTS
+/// waveform while speaking.
+///
+/// Only re-renders when the presence state changes — the reactor pulls audio
+/// levels from the store inside its own animation loop.
 export function PresenceCore({ size = 260 }: PresenceCoreProps) {
   const presence = usePresence();
-  const ttsAudioData = useAppStore((s) => s.ttsAudioData);
-  const micLevel = useAppStore((s) => (presence === 'listening' ? s.micLevel : 0));
+  const micData = useRef<AudioAnalyzerData>({
+    frequencyData: null,
+    averageLevel: 0,
+    bassLevel: 0,
+    trebleLevel: 0,
+  });
 
-  const audioData = useMemo<AudioAnalyzerData | undefined>(() => {
-    if (presence === 'speaking') return ttsAudioData;
+  const getAudioData = useCallback((): AudioAnalyzerData | undefined => {
+    const s = useAppStore.getState();
+    if (presence === 'speaking') return s.ttsAudioData;
     if (presence === 'listening') {
-      return {
-        frequencyData: null,
-        averageLevel: micLevel,
-        bassLevel: micLevel * 0.9,
-        trebleLevel: micLevel * 0.6,
-      };
+      const m = micData.current;
+      m.averageLevel = s.micLevel;
+      m.bassLevel = s.micLevel * 0.9;
+      m.trebleLevel = s.micLevel * 0.6;
+      return m;
     }
     return undefined;
-  }, [presence, ttsAudioData, micLevel]);
+  }, [presence]);
 
   return (
-    <div
-      className={`presence-core presence-${presence}`}
-      style={{ width: size, height: size, ['--mic-level' as string]: micLevel }}
-    >
-      {/* Listening halo — swells with the user's voice */}
-      <div className="presence-halo" aria-hidden="true" />
-      {/* Thinking scanner — a sweep orbiting the reactor */}
-      <div className="presence-scan" aria-hidden="true" />
+    <div className={`presence-core presence-${presence}`} style={{ width: size, height: size }}>
       <div className="presence-reactor">
-        <ArcReactor size={size} streaming={presence === 'thinking'} audioData={audioData} />
+        <ArcReactor size={size} presence={presence} getAudioData={getAudioData} />
       </div>
     </div>
   );
