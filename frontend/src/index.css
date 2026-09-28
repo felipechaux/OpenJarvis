@@ -1259,3 +1259,328 @@ button[aria-label="Send"]:not(:disabled) {
   --color-background: var(--background);
   /* Keep project radius tokens — don't override with shadcn calc values */
 }
+/* ─── J.A.R.V.I.S. SPEAKING HUD ─────────────────────────────────────────── */
+/* Always dark: it's a holographic overlay, not a themed page. */
+.jhud {
+  --hud-c: 0, 212, 255;
+  --hud-amber: 255, 159, 0;
+  --hud-avg: 0;
+  --hud-bass: 0;
+  --hud-treble: 0;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto minmax(200px, 1fr);
+  grid-template-rows: auto 1fr auto;
+  grid-template-areas:
+    "top    top    top"
+    "left   center right"
+    "bottom bottom bottom";
+  gap: 16px;
+  padding: 40px 36px 28px;
+  background:
+    radial-gradient(ellipse 55% 55% at 50% 45%, rgba(var(--hud-c), 0.10), transparent 70%),
+    rgba(2, 7, 13, 0.97);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  color: rgba(var(--hud-c), 0.9);
+  font-family: var(--font-hud);
+  overflow: hidden;
+  cursor: default;
+  animation: jhud-in 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes jhud-in {
+  0%   { opacity: 0; transform: scale(1.03); filter: brightness(2) blur(4px); }
+  40%  { opacity: 1; }
+  55%  { filter: brightness(1.4); }
+  60%  { filter: brightness(0.7); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+
+.jhud-grid,
+.jhud-scanlines,
+.jhud-vignette {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.jhud-grid {
+  background-image:
+    linear-gradient(rgba(var(--hud-c), 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(var(--hud-c), 0.05) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 20%, transparent 85%);
+  -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 50%, black 20%, transparent 85%);
+  animation: jhud-grid-drift 20s linear infinite;
+}
+@keyframes jhud-grid-drift { to { background-position: 48px 48px, 48px 48px; } }
+.jhud-scanlines {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(var(--hud-c), 0.035) 0 1px,
+    transparent 1px 3px
+  );
+  mix-blend-mode: screen;
+}
+.jhud-vignette {
+  background: radial-gradient(ellipse 90% 80% at 50% 50%, transparent 55%, rgba(0, 0, 0, 0.65));
+}
+
+/* Corner brackets */
+.jhud-corner {
+  position: absolute;
+  width: 34px;
+  height: 34px;
+  border-color: rgba(var(--hud-c), 0.7);
+  border-style: solid;
+  border-width: 0;
+  filter: drop-shadow(0 0 6px rgba(var(--hud-c), 0.6));
+  pointer-events: none;
+}
+.jhud-tl { top: 14px;    left: 14px;  border-top-width: 2px;    border-left-width: 2px; }
+.jhud-tr { top: 14px;    right: 14px; border-top-width: 2px;    border-right-width: 2px; }
+.jhud-bl { bottom: 14px; left: 14px;  border-bottom-width: 2px; border-left-width: 2px; }
+.jhud-br { bottom: 14px; right: 14px; border-bottom-width: 2px; border-right-width: 2px; }
+
+/* Top bar */
+.jhud-top {
+  grid-area: top;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 12px 10px;
+  border-bottom: 1px solid rgba(var(--hud-c), 0.22);
+  position: relative;
+  z-index: 1;
+}
+.jhud-top::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 22%;
+  height: 1px;
+  background: rgba(var(--hud-c), 0.9);
+  box-shadow: 0 0 10px rgba(var(--hud-c), 0.9);
+  animation: jhud-bar-run 3.2s ease-in-out infinite alternate;
+}
+@keyframes jhud-bar-run { to { left: 78%; } }
+.jhud-title { display: flex; flex-direction: column; gap: 4px; }
+.jhud-title-main {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.42em;
+  color: #e6fbff;
+  text-shadow: 0 0 14px rgba(var(--hud-c), 0.9), 0 0 32px rgba(var(--hud-c), 0.5);
+}
+.jhud-title-sub { font-size: 0.6rem; letter-spacing: 0.32em; opacity: 0.55; }
+.jhud-clock { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.jhud-clock-time {
+  font-size: 1.15rem;
+  letter-spacing: 0.16em;
+  color: #e6fbff;
+  text-shadow: 0 0 10px rgba(var(--hud-c), 0.8);
+  font-variant-numeric: tabular-nums;
+}
+.jhud-clock-date { font-size: 0.62rem; letter-spacing: 0.24em; opacity: 0.6; }
+
+/* Side panels — clipped corners like the suit's readouts */
+.jhud-panel {
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 16px 14px;
+  max-width: 280px;
+  width: 100%;
+  background: linear-gradient(160deg, rgba(var(--hud-c), 0.07), rgba(var(--hud-c), 0.015));
+  border: 1px solid rgba(var(--hud-c), 0.28);
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 16px 100%, 0 calc(100% - 16px));
+  animation: jhud-panel-in 0.6s cubic-bezier(0.2, 0.8, 0.2, 1) both 0.15s;
+}
+.jhud-left  { grid-area: left;  justify-self: end; }
+.jhud-right { grid-area: right; justify-self: start; animation-name: jhud-panel-in-r; }
+@keyframes jhud-panel-in   { from { opacity: 0; transform: translateX(-24px); } }
+@keyframes jhud-panel-in-r { from { opacity: 0; transform: translateX(24px); } }
+.jhud-panel-title {
+  font-size: 0.66rem;
+  letter-spacing: 0.3em;
+  color: rgb(var(--hud-amber));
+  text-shadow: 0 0 8px rgba(var(--hud-amber), 0.6);
+  padding-bottom: 6px;
+  border-bottom: 1px dashed rgba(var(--hud-c), 0.25);
+}
+
+.jhud-meter { display: flex; flex-direction: column; gap: 5px; }
+.jhud-meter-head { font-size: 0.6rem; letter-spacing: 0.2em; opacity: 0.75; }
+.jhud-meter-track {
+  height: 6px;
+  background:
+    repeating-linear-gradient(90deg, rgba(var(--hud-c), 0.14) 0 6px, transparent 6px 8px);
+  position: relative;
+  overflow: hidden;
+}
+.jhud-meter-fill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background:
+    repeating-linear-gradient(90deg, rgba(var(--hud-c), 0.95) 0 6px, transparent 6px 8px);
+  box-shadow: 0 0 10px rgba(var(--hud-c), 0.7);
+}
+
+.jhud-kv {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  font-size: 0.62rem;
+  letter-spacing: 0.14em;
+  margin: 0;
+}
+.jhud-kv dt { opacity: 0.5; }
+.jhud-kv dd { margin: 0; text-align: right; color: #d8f7ff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jhud-kv .jhud-ok { color: #6dffb0; text-shadow: 0 0 8px rgba(109, 255, 176, 0.6); }
+
+.jhud-hex {
+  margin: 0;
+  height: 7.6em;
+  overflow: hidden;
+  font-size: 0.58rem;
+  line-height: 1.25;
+  opacity: 0.45;
+  white-space: pre;
+  mask-image: linear-gradient(to bottom, transparent, black 40%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 40%);
+}
+
+.jhud-spectrum { width: 100%; height: 96px; display: block; }
+
+.jhud-radar {
+  position: relative;
+  width: 112px;
+  height: 112px;
+  align-self: center;
+  border-radius: 50%;
+  border: 1px solid rgba(var(--hud-c), 0.35);
+  background:
+    radial-gradient(circle, transparent 32%, rgba(var(--hud-c), 0.18) 33%, transparent 34%),
+    radial-gradient(circle, transparent 65%, rgba(var(--hud-c), 0.18) 66%, transparent 67%),
+    linear-gradient(rgba(var(--hud-c), 0.14), rgba(var(--hud-c), 0.14)) center / 1px 100% no-repeat,
+    linear-gradient(rgba(var(--hud-c), 0.14), rgba(var(--hud-c), 0.14)) center / 100% 1px no-repeat;
+  overflow: hidden;
+}
+.jhud-radar-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(var(--hud-c), 0.55), transparent 70deg);
+  animation: arc-rot 2.8s linear infinite;
+}
+.jhud-radar-blip {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: rgb(var(--hud-amber));
+  box-shadow: 0 0 8px rgb(var(--hud-amber));
+  animation: jhud-blip 2.8s ease-out infinite;
+}
+@keyframes jhud-blip { 0%, 60%, 100% { opacity: 0.1; } 10% { opacity: 1; } }
+
+.jhud-status { font-size: 0.62rem; letter-spacing: 0.24em; display: flex; align-items: center; gap: 8px; }
+.jhud-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ff4d4d;
+  box-shadow: 0 0 8px #ff4d4d;
+  animation: jhud-rec 1s steps(2) infinite;
+}
+@keyframes jhud-rec { 50% { opacity: 0.2; } }
+
+/* Centre reactor */
+.jhud-center {
+  grid-area: center;
+  position: relative;
+  display: grid;
+  place-items: center;
+  z-index: 1;
+  filter: drop-shadow(0 0 calc(18px + var(--hud-avg) * 40px) rgba(var(--hud-c), 0.55));
+  animation: jhud-core-in 0.7s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.jhud-center > * { grid-area: 1 / 1; }
+@keyframes jhud-core-in { from { opacity: 0; transform: scale(0.7); } }
+.jhud-reactor-ring {
+  border-radius: 50%;
+  border: 1px dashed rgba(var(--hud-c), 0.3);
+  box-shadow: inset 0 0 40px rgba(var(--hud-c), 0.08);
+  transform: scale(calc(1 + var(--hud-bass) * 0.05));
+  animation: arc-rot 60s linear infinite reverse;
+}
+
+/* Subtitles + voice trace */
+.jhud-bottom {
+  grid-area: bottom;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+.jhud-caption-label { font-size: 0.6rem; letter-spacing: 0.3em; color: rgb(var(--hud-amber)); opacity: 0.85; }
+.jhud-caption {
+  margin: 0;
+  max-width: min(920px, 92vw);
+  min-height: 2.9em;
+  text-align: center;
+  font-size: clamp(0.95rem, 1.6vw, 1.25rem);
+  line-height: 1.45;
+  letter-spacing: 0.03em;
+  color: #eafcff;
+  text-shadow: 0 0 12px rgba(var(--hud-c), 0.75);
+  animation: jhud-caption-in 0.5s ease-out both;
+}
+@keyframes jhud-caption-in {
+  from { opacity: 0; transform: translateY(6px); filter: blur(3px); }
+}
+.jhud-trace { width: min(900px, 90vw); height: 54px; display: block; }
+.jhud-hint { font-size: 0.55rem; letter-spacing: 0.3em; opacity: 0.35; }
+
+@media (max-width: 820px) {
+  .jhud {
+    grid-template-columns: 1fr;
+    grid-template-areas: "top" "center" "bottom";
+    padding: 32px 16px 20px;
+  }
+  .jhud-title-sub { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jhud, .jhud-panel, .jhud-center, .jhud-caption { animation: none; }
+  .jhud-grid, .jhud-radar-sweep, .jhud-reactor-ring, .jhud-top::after, .jhud-dot, .jhud-radar-blip { animation: none; }
+}
+.jhud-close {
+  position: absolute;
+  top: -26px;
+  right: 0;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  font-size: 0.75rem;
+  color: rgba(var(--hud-c), 0.7);
+  background: rgba(var(--hud-c), 0.06);
+  border: 1px solid rgba(var(--hud-c), 0.3);
+  cursor: pointer;
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.jhud-close:hover {
+  color: #eafcff;
+  background: rgba(var(--hud-c), 0.16);
+  box-shadow: 0 0 12px rgba(var(--hud-c), 0.6);
+}

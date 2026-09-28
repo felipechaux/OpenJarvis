@@ -12,10 +12,9 @@ export interface AudioAnalyzerData {
 const ABBREVS = /\b(Mr|Mrs|Ms|Dr|Prof|St|Jr|Sr|vs|etc|No|Fig)\./g;
 
 // Edge-TTS voice IDs.  British male for English (matches Iron Man's JARVIS),
-// Castilian male for Spanish (more formal, distinct 'c'/'z' that pairs well
-// with the British formality of the English voice).
+// Mexican male for Spanish — closest to the Latin-American dub of JARVIS.
 const VOICE_EN = 'en-GB-RyanNeural';
-const VOICE_ES = 'es-ES-AlvaroNeural';
+const VOICE_ES = 'es-MX-JorgeNeural';
 
 // Heuristic Spanish detector.  Two signals catch nearly every real sentence:
 //   1. Spanish-only orthography: ñ, inverted punctuation, accented vowels, ü.
@@ -236,6 +235,13 @@ export function useTTS() {
   const stopRequestedRef = useRef(false);
 
   const analyzeAudio = useCallback(() => {
+    // Keep the loop alive while speaking even before the first clip has
+    // decoded (speaking flips true as soon as the fetch starts).  Bailing out
+    // here used to kill the loop for the whole reply, so every visual that
+    // rides the voice (reactor waveform, HUD meters) stayed flat.
+    if (speaking) {
+      animationFrameRef.current = requestAnimationFrame(analyzeAudio);
+    }
     const analyzer = analyzerRef.current;
     if (!analyzer || !dataArrayRef.current) return;
 
@@ -258,10 +264,6 @@ export function useTTS() {
       bassLevel: Math.min(bass * 3, 1),
       trebleLevel: Math.min(treble * 2, 1),
     });
-
-    if (speaking) {
-      animationFrameRef.current = requestAnimationFrame(analyzeAudio);
-    }
   }, [speaking]);
 
   useEffect(() => {
@@ -342,8 +344,9 @@ export function useTTS() {
 
     return new Promise<void>((resolve) => {
       source.onended = () => {
+        // The output analyser is persistent, so keep reading it between
+        // sentences — levels fall to silence instead of freezing.
         sourceRef.current = null;
-        analyzerRef.current = null;
         resolve();
       };
       source.start(0);
@@ -379,6 +382,7 @@ export function useTTS() {
       }
 
       if (buf && !stopRequestedRef.current) {
+        useAppStore.getState().setTTSCaption(cleanForSpeech(text));
         const done = trackSpeech(text);
         try {
           await playBuffer(buf);
@@ -398,7 +402,10 @@ export function useTTS() {
     }
 
     drainingRef.current = false;
-    if (!stopRequestedRef.current) setSpeaking(false);
+    if (!stopRequestedRef.current) {
+      setSpeaking(false);
+      useAppStore.getState().setTTSCaption('');
+    }
   }, [fetchAudio, playBuffer]);
 
   // Enqueue a sentence — audio fetch starts immediately, plays in order
@@ -427,12 +434,14 @@ export function useTTS() {
     stopRequestedRef.current = false;
     setSpeaking(true);
 
+    useAppStore.getState().setTTSCaption(cleanForSpeech(text));
     const done = trackSpeech(text);
     try {
       await playBuffer(buf);
     } finally {
       done();
       setSpeaking(false);
+      useAppStore.getState().setTTSCaption('');
     }
   }, [fetchAudio, playBuffer]);
 
@@ -448,6 +457,7 @@ export function useTTS() {
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     analyzerRef.current = null;
     setSpeaking(false);
+    useAppStore.getState().setTTSCaption('');
     setAudioData({ frequencyData: null, averageLevel: 0, bassLevel: 0, trebleLevel: 0 });
   }, []);
 

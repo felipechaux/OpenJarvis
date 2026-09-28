@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { ChatArea } from '../components/Chat/ChatArea';
 import { SystemPanel } from '../components/Chat/SystemPanel';
+import { JarvisHud } from '../components/Chat/JarvisHud';
 import { useAppStore, generateId } from '../lib/store';
 import { streamChat } from '../lib/sse';
 import { useTTS } from '../hooks/useTTS';
@@ -181,6 +182,7 @@ REGLAS ABSOLUTAS:
         <ChatArea />
       </div>
       {systemPanelOpen && <SystemPanel />}
+      <JarvisHud />
     </div>
   );
 }

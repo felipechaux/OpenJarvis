@@ -86,6 +86,8 @@ interface Settings {
   /** J.A.R.V.I.S.-style interface chimes on wake, processing and reply
    *  (played by useEarcons). */
   earcons: boolean;
+  /** Full-screen Iron Man HUD while JARVIS is speaking (JarvisHud). */
+  speakingHud: boolean;
   language: AssistantLanguage;
 }
 
@@ -102,6 +104,7 @@ function loadSettings(): Settings {
     ttsEnabled: true,
     voiceFx: true,
     earcons: true,
+    speakingHud: true,
     language: 'es',
   };
   try {
@@ -233,6 +236,9 @@ interface AppState {
   // TTS / Voice state
   ttsSpeaking: boolean;
   ttsAudioData: AudioAnalyzerData;
+  /** Sentence currently being spoken — the HUD's subtitle line. */
+  ttsCaption: string;
+  setTTSCaption: (text: string) => void;
   setTTSSpeaking: (speaking: boolean) => void;
   setTTSAudioData: (data: AudioAnalyzerData) => void;
 
@@ -511,6 +517,8 @@ export const useAppStore = create<AppState>((set, get) => {
     },
     setTTSSpeaking: (speaking) => set({ ttsSpeaking: speaking }),
     setTTSAudioData: (data) => set({ ttsAudioData: data }),
+    ttsCaption: '',
+    setTTSCaption: (text) => set({ ttsCaption: text }),
 
     // ── Mic ──────────────────────────────────────────────────────────
     speechState: 'idle',
