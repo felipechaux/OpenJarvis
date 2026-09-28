@@ -186,6 +186,32 @@ function buildVoiceFx(ctx: AudioContext): VoiceFxChain {
   return { ctx, input: highpass, output: limiter };
 }
 
+// ── Self-echo guard ──────────────────────────────────────────────────
+// The wake-word recognisers listen through the same room the speakers play
+// into, so JARVIS saying its own name ("J.A.R.V.I.S. a su servicio") can
+// wake itself and cut off the greeting while the user is silent.  Remember
+// what was spoken recently so the wake handler can ignore that echo.
+const SELF_NAME = /\b(j\.?\s?a\.?\s?r\.?\s?v\.?\s?i\.?\s?s|jarvis)\b/i;
+// Recognisers report a word up to ~2s after it's heard; keep a margin.
+const ECHO_WINDOW_MS = 3500;
+const recentSpeech: { text: string; endedAt: number }[] = [];
+
+function trackSpeech(text: string): () => void {
+  const entry = { text, endedAt: Infinity };
+  recentSpeech.push(entry);
+  return () => { entry.endedAt = Date.now(); };
+}
+
+/// True when JARVIS has said its own name within the echo window, so a
+/// wake event right now is most likely the speakers, not the user.
+export function isLikelySelfEcho(): boolean {
+  const now = Date.now();
+  while (recentSpeech.length && now - recentSpeech[0].endedAt > ECHO_WINDOW_MS) {
+    recentSpeech.shift();
+  }
+  return recentSpeech.some((s) => SELF_NAME.test(s.text));
+}
+
 export function useTTS() {
   const [speaking, setSpeaking] = useState(false);
   const [audioData, setAudioData] = useState<AudioAnalyzerData>({
@@ -353,7 +379,16 @@ export function useTTS() {
       }
 
       if (buf && !stopRequestedRef.current) {
-        await playBuffer(buf);
+        const done = trackSpeech(text);
+        try {
+          await playBuffer(buf);
+        } catch (e) {
+          // A bad/truncated clip must not kill the loop — that left
+          // drainingRef stuck and silenced the rest of the reply.
+          console.warn('[TTS] playback failed, skipping sentence:', e);
+        } finally {
+          done();
+        }
       }
 
       // After playback, new items may have arrived
@@ -392,9 +427,11 @@ export function useTTS() {
     stopRequestedRef.current = false;
     setSpeaking(true);
 
+    const done = trackSpeech(text);
     try {
       await playBuffer(buf);
     } finally {
+      done();
       setSpeaking(false);
     }
   }, [fetchAudio, playBuffer]);

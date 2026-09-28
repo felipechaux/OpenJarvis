@@ -5,7 +5,7 @@ import { streamChat } from '../../lib/sse';
 import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
-import { useTTS } from '../../hooks/useTTS';
+import { useTTS, isLikelySelfEcho } from '../../hooks/useTTS';
 import { WAKE_EVENT, INTERRUPT_EVENT } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
@@ -72,9 +72,13 @@ export function InputArea() {
   // auto-stop so the user can speak their command and the message is
   // submitted as soon as they stop talking — no second click needed.
   useEffect(() => {
-    const onWake = () => {
+    const onWake = (e: Event) => {
       if (!speechEnabled || !speechAvailable) return;
       if (speechState !== 'idle') return;
+      if (isLikelySelfEcho()) {
+        console.log('[WakeWord] Ignored self-echo:', (e as CustomEvent).detail);
+        return;
+      }
 
       // Interrupt anything currently in flight.  Two streams can be active:
       //   - The morning greeting (owned by ChatPage) → broadcast INTERRUPT_EVENT

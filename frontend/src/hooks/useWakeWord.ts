@@ -9,6 +9,12 @@ const WAKE_EVENT = 'jarvis-wake';
 // which blocks the wake handler from ever opening the mic.
 const INTERRUPT_EVENT = 'jarvis-interrupt';
 const NATIVE_READY_TIMEOUT_MS = 5000;
+// The native JarvisWake sidecar reports "ready" but never emits a wake —
+// not even for a clear "Hey Jarvis" played through the speakers — so it
+// can't be trusted as the sole wake source.  Until it's fixed, always use
+// the Whisper polling loop (which is what actually worked before, because
+// the ready event used to be missed).  Flip back to true once it detects.
+const USE_NATIVE_WAKE = false;
 
 /// Subscribe to the native macOS wake-word sidecar.  Resolves to ``null``
 /// when:
@@ -47,6 +53,17 @@ async function subscribeToNativeWake(
       resolveReady(false);
     });
     const timeout = setTimeout(() => resolveReady(false), NATIVE_READY_TIMEOUT_MS);
+
+    // The sidecar usually reports ready ~1s after launch — well before this
+    // hook mounts (it waits for the backend) — so the one-shot event above
+    // is typically missed.  Ask Rust for the sticky state instead; missing
+    // it used to drop us into the Whisper fallback on almost every launch.
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      if (await invoke<boolean>('wake_ready')) resolveReady(true);
+    } catch {
+      // Older shell without the command — keep waiting for the event.
+    }
 
     const ready = await readyProm;
     clearTimeout(timeout);
@@ -182,7 +199,7 @@ export function useWakeWord(enabled: boolean) {
     // timeout, fall back to the cross-platform MediaRecorder + Whisper
     // polling loop so the wake word still works.
     (async () => {
-      nativeUnlisten = await subscribeToNativeWake(onWake);
+      nativeUnlisten = USE_NATIVE_WAKE ? await subscribeToNativeWake(onWake) : null;
       if (cancelled) {
         nativeUnlisten?.();
         return;

@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -935,6 +936,17 @@ fn get_api_base() -> String {
     api_base()
 }
 
+/// True once the JarvisWake sidecar has reported ``ready``.  The
+/// ``jarvis-wake-ready`` event fires ~1s after launch, long before the
+/// webview subscribes (it waits for the Python backend first), so the
+/// frontend polls this instead of relying on catching the event.
+static WAKE_READY: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn wake_ready() -> bool {
+    WAKE_READY.load(Ordering::SeqCst)
+}
+
 /// Path to the bundled JarvisWake Swift sidecar executable.
 ///
 /// The sidecar lives inside ``JarvisWake.app/Contents/MacOS/JarvisWake``
@@ -1117,6 +1129,7 @@ async fn spawn_wake_listener(app: tauri::AppHandle, backend: SharedBackend) {
                         }
                         "ready" => {
                             eprintln!("[wake] sidecar ready");
+                            WAKE_READY.store(true, Ordering::SeqCst);
                             let _ = app.emit("jarvis-wake-ready", true);
                         }
                         "error" => {
@@ -1125,6 +1138,7 @@ async fn spawn_wake_listener(app: tauri::AppHandle, backend: SharedBackend) {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("(unknown)");
                             eprintln!("[wake] sidecar error: {}", msg);
+                            WAKE_READY.store(false, Ordering::SeqCst);
                             let _ = app.emit("jarvis-wake-error", msg);
                         }
                         _ => {}
@@ -2069,6 +2083,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_setup_status,
             get_api_base,
+            wake_ready,
             start_backend,
             stop_backend,
             check_health,

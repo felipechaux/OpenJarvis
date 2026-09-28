@@ -892,6 +892,11 @@ async def detect_wake_word(request: Request):
                 beam_size=1,
                 best_of=1,
                 condition_on_previous_text=False,
+                # Skip non-speech chunks entirely.  On silence / room noise
+                # the tiny model hallucinates text — and with the prompt
+                # below it tends to echo "Jarvis", firing a wake (and
+                # cutting off the greeting) while nobody is talking.
+                vad_filter=True,
                 # Bias the LM toward the wake word — the tiny model otherwise
                 # transcribes "Jarvis" as "Jervis" / "Javis" / "drivers" /
                 # "Travis", which the substring matcher below silently drops.
