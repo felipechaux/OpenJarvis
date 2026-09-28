@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.tools import session_control as sc
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 _APP_DIRS = (
@@ -447,15 +448,16 @@ def _pick_cli(requested: str) -> str:
     return "claude"
 
 
-def build_session_command(
-    cli: str, project: Path, task: str = "", session_id: str = ""
+def build_assistant_command(
+    cli: str, project: Path, task: str = "", session_id: str = "", settings: str = ""
 ) -> str:
-    """Shell command that starts an interactive ``cli`` session in ``project``.
+    """Command line that starts an interactive ``cli`` session (no ``cd``).
 
     Claude takes the first task as a positional prompt and stays
     interactive; ``agy`` and ``gemini`` need ``-i`` (a bare prompt runs
     one-shot and exits).  Claude also gets a known ``--session-id`` so
-    ``coding_sessions`` can follow exactly this session.
+    ``coding_sessions`` can follow exactly this session, and optional
+    ``--settings`` carrying the JARVIS notification hooks.
     """
     binaries = {
         "claude": _claude_binary,
@@ -467,11 +469,21 @@ def build_session_command(
         if session_id:
             parts += ["--session-id", shlex.quote(session_id)]
         parts += ["--name", shlex.quote(f"jarvis: {project.name}")]
+        if settings:
+            parts += ["--settings", shlex.quote(settings)]
         if task:
             parts.append(shlex.quote(task))
     elif task:
         parts += ["-i", shlex.quote(task)]
-    return f"cd {shlex.quote(str(project))} && {' '.join(parts)}"
+    return " ".join(parts)
+
+
+def build_session_command(
+    cli: str, project: Path, task: str = "", session_id: str = ""
+) -> str:
+    """Shell command that ``cd``s into ``project`` and starts ``cli`` there."""
+    command = build_assistant_command(cli, project, task, session_id)
+    return f"cd {shlex.quote(str(project))} && {command}"
 
 
 @ToolRegistry.register("start_coding_session")
@@ -529,13 +541,43 @@ class StartCodingSessionTool(BaseTool):
             return err
 
         task = str(params.get("task") or "").strip()
-        session_id = str(uuid.uuid4()) if cli == "claude" else ""
-        shell_cmd = build_session_command(cli, project, task, session_id)
-
         terminal = cfg.terminal or "Terminal"
+        session_id = str(uuid.uuid4()) if cli == "claude" else ""
+        tmux_name = ""
         try:
-            _run_in_terminal(terminal, shell_cmd)
-        except (subprocess.SubprocessError, OSError) as exc:
+            if sc.tmux_bin():
+                # Inside tmux so send_to_session can type into it later.
+                tmux_name = sc.session_name(project)
+                if sc.has_session(tmux_name):
+                    if task:
+                        sc.type_message(tmux_name, task)
+                    _run_in_terminal(terminal, sc.attach_command(tmux_name))
+                    sent = f" and sent it: {task}" if task else ""
+                    return ToolResult(
+                        tool_name=tool,
+                        content=(
+                            f"A JARVIS session for {project.name} was already "
+                            f"running ({tmux_name}); reopened it{sent}. Use "
+                            "send_to_session to give it instructions."
+                        ),
+                        success=True,
+                        metadata={
+                            "cli": cli,
+                            "project": str(project),
+                            "tmux": tmux_name,
+                        },
+                    )
+                settings = str(sc.hooks_settings_file()) if cli == "claude" else ""
+                command = build_assistant_command(
+                    cli, project, task, session_id, settings
+                )
+                sc.new_session(tmux_name, project, command)
+                _run_in_terminal(terminal, sc.attach_command(tmux_name))
+            else:
+                _run_in_terminal(
+                    terminal, build_session_command(cli, project, task, session_id)
+                )
+        except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
             detail = getattr(exc, "stderr", b"") or b""
             return ToolResult(
                 tool_name=tool,
@@ -551,8 +593,18 @@ class StartCodingSessionTool(BaseTool):
             tool_name=tool,
             content=(
                 f"Started {label} in {terminal} for project {project.name}{extra}. "
-                "Use coding_sessions to follow its progress."
+                + (
+                    f"It runs in tmux session {tmux_name}: use send_to_session to "
+                    "give it instructions and coding_sessions to follow it."
+                    if tmux_name
+                    else "Use coding_sessions to follow its progress."
+                )
             ),
             success=True,
-            metadata={"cli": cli, "project": str(project), "session_id": session_id},
+            metadata={
+                "cli": cli,
+                "project": str(project),
+                "session_id": session_id,
+                "tmux": tmux_name,
+            },
         )

@@ -199,6 +199,7 @@ class TestToolsExecution:
                 args = mock_run.call_args[0][0]
                 assert args == ["open", "-a", str(app_path), str(proj_path)]
 
+    @patch("openjarvis.tools.session_control.tmux_bin", lambda: None)
     @patch("openjarvis.tools.launcher.sys.platform", "darwin")
     @patch("openjarvis.tools.launcher.subprocess.run")
     def test_start_session_defaults_to_claude(
@@ -235,6 +236,7 @@ class TestToolsExecution:
                 )
                 assert "arregla los tests" in script
 
+    @patch("openjarvis.tools.session_control.tmux_bin", lambda: None)
     @patch("openjarvis.tools.launcher.sys.platform", "darwin")
     @patch("openjarvis.tools.launcher.subprocess.run")
     def test_start_session_gemini_uses_antigravity(
@@ -264,6 +266,58 @@ class TestToolsExecution:
                 script = mock_run.call_args[0][0][2]
                 assert "/Users/me/.local/bin/agy -i " in script
                 assert "optimiza la consulta" in script
+
+
+class TestTmuxLaunch:
+    def _cfg(self, tmp_path: Path) -> MagicMock:
+        cfg = MagicMock()
+        cfg.project_roots = [str(tmp_path)]
+        cfg.max_depth = 3
+        cfg.terminal = "Terminal"
+        return cfg
+
+    def test_new_session_runs_in_tmux_and_attaches(self, tmp_path: Path) -> None:
+        (tmp_path / "openjarvis" / ".git").mkdir(parents=True)
+        sc = "openjarvis.tools.session_control"
+        with (
+            patch("openjarvis.tools.launcher.sys.platform", "darwin"),
+            patch(
+                "openjarvis.tools.launcher._launcher_config",
+                return_value=self._cfg(tmp_path),
+            ),
+            patch(f"{sc}.tmux_bin", return_value="/bin/tmux"),
+            patch(f"{sc}.has_session", return_value=False),
+            patch(f"{sc}.hooks_settings_file", return_value=Path("/h.json")),
+            patch(f"{sc}.new_session") as new,
+            patch("openjarvis.tools.launcher._run_in_terminal") as term,
+            patch("openjarvis.tools.launcher._claude_binary", return_value="claude"),
+        ):
+            res = StartCodingSessionTool().execute(project="openjarvis")
+        assert res.success and res.metadata["tmux"] == "jarvis-openjarvis"
+        name, cwd, command = new.call_args.args
+        assert name == "jarvis-openjarvis" and cwd == tmp_path / "openjarvis"
+        assert "--settings /h.json" in command
+        assert "attach -t jarvis-openjarvis" in term.call_args.args[1]
+
+    def test_existing_session_is_reused(self, tmp_path: Path) -> None:
+        (tmp_path / "openjarvis" / ".git").mkdir(parents=True)
+        sc = "openjarvis.tools.session_control"
+        with (
+            patch("openjarvis.tools.launcher.sys.platform", "darwin"),
+            patch(
+                "openjarvis.tools.launcher._launcher_config",
+                return_value=self._cfg(tmp_path),
+            ),
+            patch(f"{sc}.tmux_bin", return_value="/bin/tmux"),
+            patch(f"{sc}.has_session", return_value=True),
+            patch(f"{sc}.new_session") as new,
+            patch(f"{sc}.type_message") as typed,
+            patch("openjarvis.tools.launcher._run_in_terminal"),
+        ):
+            res = StartCodingSessionTool().execute(project="openjarvis", task="sigue")
+        assert res.success and "already running" in res.content
+        new.assert_not_called()
+        typed.assert_called_once_with("jarvis-openjarvis", "sigue")
 
 
 class TestSessionCommand:

@@ -22,7 +22,10 @@ class MemoryManageTool(BaseTool):
         return ToolSpec(
             name="memory_manage",
             description=(
-                "Read, add, update, or remove entries in persistent agent memory."
+                "Your own persistent memory (~/.openjarvis/MEMORY.md): decisions, "
+                "reminders and context to carry into future conversations that "
+                "are not facts about the user (those go in user_profile_manage). "
+                "Actions: read, add, update (exact current text), remove."
             ),
             parameters={
                 "type": "object",

@@ -509,6 +509,16 @@ def describe(s: Session, detailed: bool, now: Optional[float] = None) -> str:
     return "\n".join(lines)
 
 
+def _tmux_screen(s: Session) -> str:
+    """Screen of the JARVIS tmux session running ``s``, if any."""
+    from openjarvis.tools import session_control as sc
+
+    for name, path in sc.list_sessions():
+        if path == s.cwd or name == sc.session_name(Path(s.cwd)):
+            return sc.capture_screen(name, lines=15)
+    return ""
+
+
 @ToolRegistry.register("coding_sessions")
 class CodingSessionsTool(BaseTool):
     """List and check on the user's Claude Code / Gemini CLI sessions."""
@@ -583,9 +593,11 @@ class CodingSessionsTool(BaseTool):
                 success=True,
             )
         if action == "status":
-            return ToolResult(
-                tool_name=tool, content=describe(sessions[0], True, now), success=True
-            )
+            content = describe(sessions[0], True, now)
+            screen = _tmux_screen(sessions[0])
+            if screen:
+                content += f"\n  Terminal screen now (tmux):\n{screen}"
+            return ToolResult(tool_name=tool, content=content, success=True)
         shown = sessions[:10]
         body = "\n".join(f"- {describe(s, False, now)}" for s in shown)
         more = (

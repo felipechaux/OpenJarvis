@@ -819,6 +819,13 @@ class LauncherConfig:
     terminal: str = "Terminal"
 
 
+@dataclass
+class NotesConfig:
+    """``apple_notes`` tool: the Notes.app folder JARVIS writes into."""
+
+    folder: str = "JARVIS"
+
+
 @dataclass(slots=True)
 class ToolsConfig:
     """Tools primitive settings — wraps storage and MCP configuration."""
@@ -827,6 +834,7 @@ class ToolsConfig:
     mcp: MCPConfig = field(default_factory=MCPConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     launcher: LauncherConfig = field(default_factory=LauncherConfig)
+    notes: NotesConfig = field(default_factory=NotesConfig)
     enabled: str = ""  # comma-separated default tools
 
 

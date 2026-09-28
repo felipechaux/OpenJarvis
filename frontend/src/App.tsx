@@ -18,6 +18,7 @@ import { OptInModal } from './components/OptInModal';
 import { useWakeWord } from './hooks/useWakeWord';
 import { useCompanionMode } from './hooks/useCompanionMode';
 import { useEarcons } from './hooks/useEarcons';
+import { useSessionAnnouncements } from './hooks/useSessionAnnouncements';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -178,6 +179,7 @@ export default function App() {
   useWakeWord(setupDone && speechEnabled);
   useCompanionMode({ registerShortcut: setupDone });
   useEarcons();
+  useSessionAnnouncements(setupDone);
 
   // Global keyboard shortcuts
   useEffect(() => {
