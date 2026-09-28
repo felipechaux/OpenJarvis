@@ -4,14 +4,19 @@ import { useAppStore } from '../lib/store';
 /// Drives every "alive" visual (reactor, companion status line).
 export type Presence = 'idle' | 'listening' | 'thinking' | 'speaking';
 
-export function usePresence(): Presence {
-  const speechState = useAppStore((s) => s.speechState);
-  const streaming = useAppStore((s) => s.streamState.isStreaming);
-  const speaking = useAppStore((s) => s.ttsSpeaking);
-  if (speechState === 'recording') return 'listening';
-  if (speaking) return 'speaking';
-  if (speechState === 'transcribing' || streaming) return 'thinking';
+type AppState = ReturnType<typeof useAppStore.getState>;
+
+/// Pure presence derivation, shared by the hook and non-React subscribers
+/// (e.g. the interface chimes in useEarcons).
+export function presenceOf(s: AppState): Presence {
+  if (s.speechState === 'recording') return 'listening';
+  if (s.ttsSpeaking) return 'speaking';
+  if (s.speechState === 'transcribing' || s.streamState.isStreaming) return 'thinking';
   return 'idle';
+}
+
+export function usePresence(): Presence {
+  return useAppStore(presenceOf);
 }
 
 const LABELS: Record<'es' | 'en', Record<Presence, string>> = {

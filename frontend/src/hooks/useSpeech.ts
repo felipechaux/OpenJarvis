@@ -38,6 +38,10 @@ const VAD_SILENCE_RMS = 0.012;        // clearly-silent ceiling (above this is "
 const VAD_SILENCE_HOLD_MS = 1200;     // silence after speech → stop
 const VAD_NO_SPEECH_TIMEOUT_MS = 6000; // hard timeout if user never speaks at all
 const VAD_MAX_RECORDING_MS = 30000;   // hard cap on total recording
+// Ignore the first moments of a recording: the wake chime (useEarcons)
+// plays as the mic opens and would otherwise count as speech, letting the
+// silence timer cut the user off before they start talking.
+const VAD_ARM_DELAY_MS = 550;
 const VAD_TICK_MS = 80;
 // Log every Nth tick so the console doesn't flood but we can still see VAD
 // progress (RMS, speechStarted, elapsed) when debugging "the mic opened
@@ -285,6 +289,8 @@ export function useSpeech() {
             triggerStop(false);
             return;
           }
+
+          if (elapsed < VAD_ARM_DELAY_MS) return;
 
           // Two-threshold hysteresis:
           //   rms > VAD_SPEECH_RMS  → clearly speaking, reset silence timer

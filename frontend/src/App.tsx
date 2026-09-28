@@ -17,6 +17,7 @@ import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } fr
 import { OptInModal } from './components/OptInModal';
 import { useWakeWord } from './hooks/useWakeWord';
 import { useCompanionMode } from './hooks/useCompanionMode';
+import { useEarcons } from './hooks/useEarcons';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -176,6 +177,7 @@ export default function App() {
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   useWakeWord(setupDone && speechEnabled);
   useCompanionMode({ registerShortcut: setupDone });
+  useEarcons();
 
   // Global keyboard shortcuts
   useEffect(() => {

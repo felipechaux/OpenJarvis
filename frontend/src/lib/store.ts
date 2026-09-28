@@ -83,6 +83,9 @@ interface Settings {
   /** Subtle J.A.R.V.I.S.-style polish on spoken replies (EQ, light
    *  compression, faint holographic reverb) applied in useTTS. */
   voiceFx: boolean;
+  /** J.A.R.V.I.S.-style interface chimes on wake, processing and reply
+   *  (played by useEarcons). */
+  earcons: boolean;
   language: AssistantLanguage;
 }
 
@@ -98,6 +101,7 @@ function loadSettings(): Settings {
     speechEnabled: true,
     ttsEnabled: true,
     voiceFx: true,
+    earcons: true,
     language: 'es',
   };
   try {
