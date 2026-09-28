@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { getBase } from '../lib/api';
+import { useAppStore } from '../lib/store';
 
 export interface AudioAnalyzerData {
   frequencyData: Uint8Array | number[] | null;
@@ -29,6 +30,18 @@ function detectVoice(text: string): string {
     return VOICE_ES;
   }
   return VOICE_EN;
+}
+
+/// Pick the voice for a chunk of text honouring the app-level language
+/// setting.  A fixed language uses ONE voice for everything — per-sentence
+/// auto-detection made bilingual replies flip accents mid-response, which
+/// is exactly the "two accents / two languages" complaint.  Auto-detection
+/// only remains for the explicit 'auto' setting.
+function resolveVoice(text: string): string {
+  const lang = useAppStore.getState().settings.language;
+  if (lang === 'es') return VOICE_ES;
+  if (lang === 'en') return VOICE_EN;
+  return detectVoice(text);
 }
 
 function cleanForSpeech(text: string): string {
@@ -123,7 +136,7 @@ export function useTTS() {
   const fetchAudio = useCallback(async (text: string, voiceId?: string): Promise<ArrayBuffer | null> => {
     const clean = cleanForSpeech(text);
     if (!clean) return null;
-    const voice = voiceId ?? detectVoice(clean);
+    const voice = voiceId ?? resolveVoice(clean);
     try {
       const res = await fetch(`${getBase()}/v1/speech/synthesize`, {
         method: 'POST',

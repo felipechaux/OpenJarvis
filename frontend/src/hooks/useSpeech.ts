@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { transcribeAudio, fetchSpeechHealth } from '../lib/api';
+import { useAppStore } from '../lib/store';
 
 export type SpeechState = 'idle' | 'recording' | 'transcribing';
 
@@ -81,7 +82,14 @@ export function useSpeech() {
         });
 
         try {
-          const result = await transcribeAudio(blob);
+          // Force the configured language so Whisper doesn't mis-detect and
+          // return the wrong-language transcript; 'auto' keeps detection on.
+          const lang = useAppStore.getState().settings.language;
+          const result = await transcribeAudio(
+            blob,
+            undefined,
+            lang === 'auto' ? undefined : lang,
+          );
           console.log('[useSpeech] transcribe done', {
             ms: Date.now() - transcribeStart,
             text: result.text,

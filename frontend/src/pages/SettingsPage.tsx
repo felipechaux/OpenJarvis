@@ -526,6 +526,25 @@ export function SettingsPage() {
 
           {/* Speech */}
           <Section title="Speech">
+            <SettingRow
+              label="Idioma / Language"
+              description="Primary language for voice, transcription and replies"
+            >
+              <select
+                value={settings.language}
+                onChange={(e) => { updateSettings({ language: e.target.value as any }); showSaved(); }}
+                className="text-sm px-3 py-1.5 rounded-lg outline-none cursor-pointer"
+                style={{
+                  background: 'var(--color-bg-secondary)',
+                  color: 'var(--color-text)',
+                  border: '1px solid var(--color-border)',
+                }}
+              >
+                <option value="es">Español (principal)</option>
+                <option value="en">English</option>
+                <option value="auto">Auto-detect</option>
+              </select>
+            </SettingRow>
             <SettingRow label="Speech-to-Text" description="Enable microphone input for voice dictation">
               <button
                 onClick={() => { updateSettings({ speechEnabled: !settings.speechEnabled }); showSaved(); }}

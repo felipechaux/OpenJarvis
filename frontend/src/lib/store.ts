@@ -66,6 +66,9 @@ function saveConversations(store: ConversationStore): void {
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
+/** Primary assistant language: fixed Spanish, fixed English, or per-text auto-detect. */
+export type AssistantLanguage = 'es' | 'en' | 'auto';
+
 interface Settings {
   theme: ThemeMode;
   apiUrl: string;
@@ -76,6 +79,7 @@ interface Settings {
   maxTokens: number;
   speechEnabled: boolean;
   ttsEnabled: boolean;
+  language: AssistantLanguage;
 }
 
 function loadSettings(): Settings {
@@ -89,6 +93,7 @@ function loadSettings(): Settings {
     maxTokens: 4096,
     speechEnabled: true,
     ttsEnabled: true,
+    language: 'es',
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
