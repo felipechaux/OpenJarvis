@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { transcribeAudio, fetchSpeechHealth } from '../lib/api';
 import { useAppStore } from '../lib/store';
+import { VadGate } from '../lib/vad';
 
 export type SpeechState = 'idle' | 'recording' | 'transcribing';
 
@@ -19,30 +20,9 @@ export interface StartRecordingOptions {
   onAutoCancel?: () => void;
 }
 
-// VAD tunables — hysteresis-based.  A MacBook's built-in mic has a noise
-// floor around 0.005-0.012 RMS even in a "quiet" room (fan, breathing,
-// ventilation, distant traffic).  A single threshold always loses:
-// adaptive-calibration approaches drift either too low (background keeps
-// resetting silence) or too high (user gets cut off).
-//
-// Two-threshold hysteresis instead:
-//   - RMS > VAD_SPEECH_RMS         → user is clearly speaking
-//   - RMS < VAD_SILENCE_RMS        → room is clearly silent
-//   - middle band (uncertain)      → hold current state, change nothing
-//
-// This way ambient noise that sits at 0.014 (between SILENCE and SPEECH)
-// neither falsely advances the silence timer nor falsely resets it once
-// the user stops talking.
-const VAD_SPEECH_RMS = 0.030;         // clearly-speaking floor (normal voice ≈ 0.05-0.15)
-const VAD_SILENCE_RMS = 0.012;        // clearly-silent ceiling (above this is "uncertain")
-const VAD_SILENCE_HOLD_MS = 1200;     // silence after speech → stop
-const VAD_NO_SPEECH_TIMEOUT_MS = 6000; // hard timeout if user never speaks at all
-const VAD_MAX_RECORDING_MS = 30000;   // hard cap on total recording
-// Ignore the first moments of a recording: the wake chime (useEarcons)
-// plays as the mic opens and would otherwise count as speech, letting the
-// silence timer cut the user off before they start talking.
-const VAD_ARM_DELAY_MS = 550;
-const VAD_TICK_MS = 80;
+// Hands-free recordings stop via VadGate (lib/vad.ts): thresholds relative
+// to the background so music doesn't hold the mic open, and a recording
+// with no speech is discarded instead of transcribed.
 // Log every Nth tick so the console doesn't flood but we can still see VAD
 // progress (RMS, speechStarted, elapsed) when debugging "the mic opened
 // but never closed" bugs in WKWebView.
@@ -114,6 +94,26 @@ export function useSpeech() {
       .then((health) => setAvailable(health.available))
       .catch(() => setAvailable(false));
   }, []);
+
+  /// Stop capture and throw the audio away — no transcription.  Used when
+  /// a wake-triggered recording heard no speech (music, a false wake):
+  /// Whisper would otherwise turn the song or the silence into a command.
+  const discardRecording = useCallback(() => {
+    const recorder = mediaRecorderRef.current;
+    stopMeter();
+    if (recorder) {
+      recorder.ondataavailable = null;
+      recorder.onstop = null;
+      if (recorder.state === 'recording') {
+        try { recorder.stop(); } catch {}
+      }
+    }
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    mediaRecorderRef.current = null;
+    chunksRef.current = [];
+    setState('idle');
+  }, [stopMeter]);
 
   const finalizeRecording = useCallback(async (): Promise<string> => {
     const recorder = mediaRecorderRef.current;
@@ -219,11 +219,9 @@ export function useSpeech() {
         const buffer = new Uint8Array(analyser.fftSize);
 
         const recordingStart = Date.now();
-        let speechStarted = false;
-        let silenceStart = 0;
+        const gate = new VadGate();
         let stopped = false;
         let tickCount = 0;
-        let maxRmsSeen = 0;
 
         console.log('[useSpeech] autoStop VAD armed', {
           ctxState: audioCtx.state,
@@ -242,13 +240,20 @@ export function useSpeech() {
           console.log('[useSpeech] VAD triggerStop', {
             cancelled,
             elapsedMs: Date.now() - recordingStart,
-            speechStarted,
-            maxRmsSeen,
+            speechStarted: gate.speechStarted,
+            speechMs: gate.speechMs,
+            maxRmsSeen: Number(gate.maxRms.toFixed(4)),
+            floor: Number(gate.floor.toFixed(4)),
           });
           cleanup();
+          if (cancelled) {
+            discardRecording();
+            options.onAutoCancel?.();
+            return;
+          }
           try {
             const text = await finalizeRecording();
-            if (cancelled || !text.trim()) {
+            if (!text.trim()) {
               options.onAutoCancel?.();
             } else {
               options.onAutoResult?.(text);
@@ -268,73 +273,34 @@ export function useSpeech() {
             sumSquares += sample * sample;
           }
           const rms = Math.sqrt(sumSquares / buffer.length);
-          if (rms > maxRmsSeen) maxRmsSeen = rms;
-          const now = Date.now();
-          const elapsed = now - recordingStart;
+          const elapsed = Date.now() - recordingStart;
+          const verdict = gate.push(rms, elapsed);
 
           tickCount += 1;
           if (tickCount % VAD_LOG_EVERY_N_TICKS === 0) {
             console.log('[useSpeech] VAD tick', {
               elapsedMs: elapsed,
               rms: Number(rms.toFixed(4)),
-              maxRmsSeen: Number(maxRmsSeen.toFixed(4)),
-              speechStarted,
-              silenceMs: silenceStart === 0 ? 0 : now - silenceStart,
+              floor: Number(gate.floor.toFixed(4)),
+              speechThreshold: Number(gate.speechThreshold.toFixed(4)),
+              speechStarted: gate.speechStarted,
+              silenceMs: gate.silenceMs(elapsed),
               ctxState: audioCtx.state,
             });
           }
 
-          // Hard cap on total recording duration
-          if (elapsed > VAD_MAX_RECORDING_MS) {
-            triggerStop(false);
-            return;
-          }
-
-          if (elapsed < VAD_ARM_DELAY_MS) return;
-
-          // Two-threshold hysteresis:
-          //   rms > VAD_SPEECH_RMS  → clearly speaking, reset silence timer
-          //   rms < VAD_SILENCE_RMS → clearly silent, advance silence timer
-          //   in between            → uncertain, hold current state
-          if (rms > VAD_SPEECH_RMS) {
-            speechStarted = true;
-            silenceStart = 0;
-            return;
-          }
-
-          if (rms >= VAD_SILENCE_RMS) {
-            // Middle "uncertain" band — neither clearly speaking nor
-            // clearly silent.  Don't reset silenceStart, don't start
-            // counting either.  Just wait for the audio to commit one
-            // way or the other.  This is the whole point of hysteresis.
-            return;
-          }
-
-          // rms < VAD_SILENCE_RMS — room is clearly silent.
-          if (!speechStarted) {
-            if (elapsed > VAD_NO_SPEECH_TIMEOUT_MS) {
-              // No speech captured at all — cancel quietly
-              triggerStop(true);
-            }
-            return;
-          }
-
-          if (silenceStart === 0) {
-            silenceStart = now;
-          } else if (now - silenceStart > VAD_SILENCE_HOLD_MS) {
-            triggerStop(false);
-          }
-        }, VAD_TICK_MS);
+          if (verdict !== 'listening') triggerStop(verdict === 'cancel');
+        }, gate.t.tickMs);
 
         // Watchdog: even if the tick interval breaks (clearInterval racing,
         // tab throttled, etc.) we guarantee the recording can't outlive
-        // VAD_MAX_RECORDING_MS + 1s.  Without this the "animation never
+        // the max recording time + 1s.  Without this the "animation never
         // ends" bug is impossible to recover from short of a page reload.
         const watchdog = window.setTimeout(() => {
           if (stopped) return;
           console.warn('[useSpeech] watchdog forcing stop after max recording');
-          triggerStop(false);
-        }, VAD_MAX_RECORDING_MS + 1000);
+          triggerStop(!gate.speechStarted);
+        }, gate.t.maxRecordingMs + 1000);
 
         const cleanup = () => {
           clearInterval(tick);
@@ -350,7 +316,7 @@ export function useSpeech() {
       setError('Microphone access denied');
       setState('idle');
     }
-  }, [finalizeRecording, stopMeter]);
+  }, [finalizeRecording, discardRecording, stopMeter]);
 
   const stopRecording = useCallback(async (): Promise<string> => {
     // If VAD was running, cancel it — we're stopping manually.

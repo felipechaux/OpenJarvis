@@ -167,3 +167,45 @@ def test_synthesize_missing_text():
     client, _ = _synth_client()
     response = client.post("/v1/speech/synthesize", json={"text": "  "})
     assert response.status_code == 400
+
+
+def test_transcribe_drops_whisper_hallucination(client, mock_speech_backend):
+    """Silence / music captions must not come back as a command."""
+    mock_speech_backend.transcribe.return_value = TranscriptionResult(
+        text="Subtítulos realizados por la comunidad de Amara.org",
+        language="es",
+        confidence=0.4,
+        duration_seconds=6.0,
+        segments=[],
+    )
+    response = client.post(
+        "/v1/speech/transcribe",
+        files={"file": ("test.webm", b"fake audio data", "audio/webm")},
+    )
+    assert response.status_code == 200
+    assert response.json()["text"] == ""
+
+
+def test_wake_word_detect_uses_two_stage_detector(app_with_speech, monkeypatch):
+    """The endpoint returns what detect_wake decides (verify model wired in)."""
+    import openjarvis.speech.wake as wake
+
+    tiny, base = object(), object()
+    app_with_speech.state._wake_word_model = tiny
+    app_with_speech.state._wake_verify_model = base
+    seen = {}
+
+    def fake_detect(model, verify_model, path):
+        seen["models"] = (model, verify_model)
+        return False, "jarvis, como porque tiene la música"
+
+    monkeypatch.setattr(wake, "detect_wake", fake_detect)
+    response = TestClient(app_with_speech).post(
+        "/v1/speech/wake-word/detect",
+        files={"file": ("wake.webm", b"x" * 2000, "audio/webm")},
+    )
+    assert response.json() == {
+        "detected": False,
+        "text": "jarvis, como porque tiene la música",
+    }
+    assert seen["models"] == (tiny, base)

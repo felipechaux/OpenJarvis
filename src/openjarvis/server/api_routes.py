@@ -763,8 +763,16 @@ async def transcribe_speech(request: Request):
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "wav"
 
     result = backend.transcribe(audio_bytes, format=ext, language=language or None)
+    text = result.text
+    # Whisper turns silence / music into stock captions ("Gracias por
+    # ver", "Subtítulos por Amara.org") that would be sent as a command.
+    from openjarvis.speech.wake import is_hallucination
+
+    if is_hallucination(text):
+        logger.info("Dropped hallucinated transcript: '%s'", text)
+        text = ""
     return {
-        "text": result.text,
+        "text": text,
         "language": result.language,
         "confidence": result.confidence,
         "duration_seconds": result.duration_seconds,
@@ -843,28 +851,43 @@ async def tts_voices(request: Request):
 async def detect_wake_word(request: Request):
     """Fast wake-word detection using a tiny Whisper model.
 
-    Accepts the same multipart ``file`` field as /transcribe but uses a
-    dedicated tiny model instance so it doesn't block the main STT backend.
+    Accepts the same multipart ``file`` field as /transcribe but uses
+    dedicated model instances so it doesn't block the main STT backend.
+    Hits from the tiny model are confirmed by a ``base`` model so music
+    doesn't wake JARVIS (see :mod:`openjarvis.speech.wake`).
     Returns ``{"detected": bool, "text": str}``.
     """
     import asyncio
     import tempfile
 
-    # Lazy-init a tiny model stored on app state (loaded once, reused)
+    from openjarvis.speech.wake import detect_wake
+
+    def _load(size: str):
+        from faster_whisper import WhisperModel
+
+        return WhisperModel(size, device="auto", compute_type="int8")
+
+    loop = asyncio.get_event_loop()
+    # Lazy-init both models on app state (loaded once, reused).
     model = getattr(request.app.state, "_wake_word_model", None)
     if model is None:
         try:
-            from faster_whisper import WhisperModel
-
-            def _load():
-                return WhisperModel("tiny", device="auto", compute_type="int8")
-
-            loop = asyncio.get_event_loop()
-            model = await loop.run_in_executor(None, _load)
+            model = await loop.run_in_executor(None, _load, "tiny")
             request.app.state._wake_word_model = model
         except Exception as exc:
             logger.warning("Wake word model unavailable: %s", exc)
             return {"detected": False, "text": ""}
+    verify_model = getattr(request.app.state, "_wake_verify_model", None)
+    if verify_model is None and not getattr(
+        request.app.state, "_wake_verify_failed", False
+    ):
+        try:
+            verify_model = await loop.run_in_executor(None, _load, "base")
+            request.app.state._wake_verify_model = verify_model
+        except Exception as exc:
+            # Still usable, just more false wakes on music.
+            logger.warning("Wake verify model unavailable: %s", exc)
+            request.app.state._wake_verify_failed = True
 
     form = await request.form()
     audio_file = form.get("file")
@@ -878,57 +901,14 @@ async def detect_wake_word(request: Request):
     filename = getattr(audio_file, "filename", "wake.webm")
     suffix = "." + filename.rsplit(".", 1)[-1] if "." in filename else ".webm"
 
-    def _transcribe():
+    def _detect():
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=True) as tmp:
             tmp.write(audio_bytes)
             tmp.flush()
-            segs, _ = model.transcribe(
-                tmp.name,
-                # Auto-detect language so bilingual ES/EN speakers aren't
-                # forced into English transcription (which would mangle
-                # "Jarvis" pronounced with a Spanish accent into
-                # "yarvis"/"jarbis" with even worse confidence than letting
-                # Whisper pick es).
-                beam_size=1,
-                best_of=1,
-                condition_on_previous_text=False,
-                # Skip non-speech chunks entirely.  On silence / room noise
-                # the tiny model hallucinates text — and with the prompt
-                # below it tends to echo "Jarvis", firing a wake (and
-                # cutting off the greeting) while nobody is talking.
-                vad_filter=True,
-                # Bias the LM toward the wake word — the tiny model otherwise
-                # transcribes "Jarvis" as "Jervis" / "Javis" / "drivers" /
-                # "Travis", which the substring matcher below silently drops.
-                initial_prompt=(
-                    "The user is talking to an AI assistant named Jarvis. "
-                    "They may speak English or Spanish and say 'Jarvis', "
-                    "'hey Jarvis', 'hi Jarvis', 'hello Jarvis', "
-                    "'oye Jarvis', 'hola Jarvis', or 'ey Jarvis' "
-                    "to get its attention."
-                ),
-            )
-            return "".join(s.text for s in segs).strip().lower()
-
-    # Common mishearings the tiny Whisper model produces for "Jarvis" across
-    # English and Spanish accents.  Excluded: near-homophones that are also
-    # common words ("travis", "drivers") to keep false positives low.
-    WAKE_TOKENS = (
-        "jarvis", "jervis", "javis", "jarvey", "jarvi",
-        # Spanish-accent mishearings
-        "yarvis", "yarbis", "jarbis", "harvis", "charvis",
-        "yarvi", "harvi", "jarvys", "jarvees",
-    )
-
-    def _matches(text: str) -> bool:
-        # Word-boundary-ish match so "tarjeeves" / "harvester" don't trip it.
-        padded = f" {text} "
-        return any(f" {tok}" in padded for tok in WAKE_TOKENS)
+            return detect_wake(model, verify_model, tmp.name)
 
     try:
-        loop = asyncio.get_event_loop()
-        text = await loop.run_in_executor(None, _transcribe)
-        detected = _matches(text)
+        detected, text = await loop.run_in_executor(None, _detect)
         if detected:
             logger.info("Wake word detected: '%s'", text)
         return {"detected": detected, "text": text}
