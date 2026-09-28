@@ -554,6 +554,20 @@ async def _fetch_nvidia_models(api_key: str) -> list[str]:
         return []
 
 
+def _disabled_cloud_providers(request: Request) -> set[str]:
+    """``[engine] disabled_cloud_providers`` as a lowercase set."""
+    cfg = getattr(request.app.state, "config", None)
+    if cfg is None:
+        try:
+            from openjarvis.core.config import load_config
+
+            cfg = load_config()
+        except Exception:  # noqa: BLE001
+            return set()
+    names = getattr(getattr(cfg, "engine", None), "disabled_cloud_providers", None)
+    return {str(n).strip().lower() for n in (names or []) if str(n).strip()}
+
+
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelListResponse:
     """List available models: local (Ollama) + cloud models for any set API keys."""
@@ -622,6 +636,11 @@ async def list_models(request: Request) -> ModelListResponse:
     rest_cloud = [m for m in cloud_ids if m != default_model]
     rest_local = [m for m in local_ids if m != default_model]
     all_model_ids = priority + rest_cloud + rest_local
+    disabled = _disabled_cloud_providers(request)
+    if disabled:
+        from openjarvis.server.cloud_router import get_provider
+
+        all_model_ids = [m for m in all_model_ids if get_provider(m) not in disabled]
     return ModelListResponse(
         data=[ModelObject(id=mid) for mid in all_model_ids],
     )

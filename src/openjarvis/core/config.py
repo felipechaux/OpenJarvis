@@ -424,6 +424,10 @@ class EngineConfig:
     # How the gemini_cli engine authenticates: "subscription" (the CLI's own
     # Google login, like claude_cli) or "api_key" (GEMINI_API_KEY).
     gemini_cli_auth: str = "subscription"
+    # Cloud API providers to hide from the model list even when their key is
+    # set, e.g. ["anthropic"] when Claude is used through the claude_cli
+    # subscription and the API key has no credits.
+    disabled_cloud_providers: List[str] = field(default_factory=list)
 
     # Backward-compat properties for old flat attribute names
     @property
