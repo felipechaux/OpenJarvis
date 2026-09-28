@@ -13,7 +13,7 @@ Guard rails — JARVIS also reads untrusted text (emails, web pages):
 * permission prompts are answered only via explicit ``keys`` actions that
   the tool description reserves for a direct user instruction.
 
-Claude sessions also get Stop / Notification / PostToolUse hooks (via ``--settings``,
+Claude sessions also get Stop / Notification hooks (via ``--settings``,
 leaving the user's global settings untouched) that POST to the JARVIS
 server so it can announce progress, "Claude terminó" or "Claude pide
 permiso".
@@ -159,6 +159,30 @@ def capture_screen(name: str, lines: int = 20) -> str:
     return "\n".join(rows[-lines:])
 
 
+def claude_session_id(name: str) -> str:
+    """The ``--session-id`` the session's Claude process was started with."""
+    if not name.startswith(PREFIX):
+        return ""
+    try:
+        pids = _tmux("list-panes", "-t", name, "-F", "#{pane_pid}").stdout.split()
+    except (subprocess.SubprocessError, OSError, RuntimeError):
+        return ""
+    for pid in pids:
+        try:
+            cmd = subprocess.run(
+                ["ps", "-o", "command=", "-p", pid],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            ).stdout
+        except (subprocess.SubprocessError, OSError):
+            continue
+        match = re.search(r"--session-id\s+([0-9a-fA-F-]{36})", cmd)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def type_message(name: str, message: str) -> None:
     """Type ``message`` as literal text into the session, then press Enter."""
     flat = re.sub(r"\s*\n\s*", " ", message).strip()
@@ -216,7 +240,9 @@ def hooks_settings_file() -> Path:
         f"--data-binary @- {_EVENTS_URL} >/dev/null 2>&1 || true"
     )
     hook = [{"hooks": [{"type": "command", "command": post}]}]
-    settings = {"hooks": {"Stop": hook, "Notification": hook, "PostToolUse": hook}}
+    # Progress comes from server/session_watcher.py (transcript + screen),
+    # so only the turn-end and permission events need hooks.
+    settings = {"hooks": {"Stop": hook, "Notification": hook}}
     _HOOKS_FILE.parent.mkdir(parents=True, exist_ok=True)
     text = json.dumps(settings, indent=2)
     if not _HOOKS_FILE.exists() or _HOOKS_FILE.read_text() != text:

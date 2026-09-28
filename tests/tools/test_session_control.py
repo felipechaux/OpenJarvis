@@ -13,6 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from openjarvis.server import coding_sessions_router as router_mod
+from openjarvis.server import session_watcher as watcher
 from openjarvis.tools import session_control as sc
 from openjarvis.tools.launcher import build_assistant_command
 
@@ -92,7 +93,7 @@ class TestLaunchCommand:
             data = json.loads(sc.hooks_settings_file().read_text())
         command = data["hooks"]["Stop"][0]["hooks"][0]["command"]
         assert "/v1/coding-sessions/events" in command and "|| true" in command
-        assert set(data["hooks"]) == {"Stop", "Notification", "PostToolUse"}
+        assert set(data["hooks"]) == {"Stop", "Notification"}
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
@@ -206,67 +207,101 @@ class TestEventsRouter:
 
 
 class TestProgress:
-    def _hook(self, tool: str, **args) -> dict:
-        return {
-            "hook_event_name": "PostToolUse",
-            "session_id": "sess-p",
-            "cwd": "/x/openjarvis/repo",
-            "tool_name": tool,
-            "tool_input": args,
-        }
+    SCREEN_WORKING = (
+        "✽ Mustering… (12m 28s · ↓ 25.1k tokens · thinking)\n esc to interrupt"
+    )
+    SCREEN_IDLE = "❯ \n  ⏵⏵ auto mode on"
 
     @pytest.fixture(autouse=True)
     def _fresh(self, monkeypatch: pytest.MonkeyPatch):
-        monkeypatch.setattr(router_mod, "_progress", {})
-        monkeypatch.setattr(router_mod, "_progress_interval", lambda: 60.0)
+        monkeypatch.setattr(watcher, "_state", {})
 
     def test_summary_groups_actions(self) -> None:
         actions = [
-            router_mod.describe_action("Read", {"file_path": "/a/x.py"}),
-            router_mod.describe_action("Edit", {"file_path": "/a/launcher.py"}),
-            router_mod.describe_action("Edit", {"file_path": "/a/launcher.py"}),
-            router_mod.describe_action("Bash", {"description": "Run the tests"}),
+            watcher.describe_action("Read", {"file_path": "/a/x.py"}),
+            watcher.describe_action("Edit", {"file_path": "/a/launcher.py"}),
+            watcher.describe_action("Edit", {"file_path": "/a/launcher.py"}),
+            watcher.describe_action("Bash", {"description": "Run the tests"}),
         ]
-        assert router_mod.summarize_actions(actions) == (
+        assert watcher.summarize_actions(actions) == (
             "editó launcher.py, ejecutó Run the tests y revisó 1 archivo"
         )
-        reads = [router_mod.describe_action("Grep", {})] * 3
-        assert router_mod.summarize_actions(reads) == (
-            "está revisando el código (3 lecturas)"
-        )
 
-    def test_first_update_after_20s_then_every_interval(self) -> None:
+    def test_elapsed_from_spinner(self) -> None:
+        assert watcher._elapsed_from_screen(self.SCREEN_WORKING) == 748
+        assert watcher._elapsed_from_screen("(1h 2m 3s · x)") == 3723
+        assert watcher._elapsed_from_screen("nothing") is None
+
+    def test_actions_then_interval(self) -> None:
+        edit = [("edit", "b.py")]
         t0 = 1000.0
-        track = router_mod._track_progress
-        assert track(self._hook("Read", file_path="/a/x.py"), t0) is None
-        assert track(self._hook("Edit", file_path="/a/b.py"), t0 + 5) is None
-        first = track(self._hook("Bash", command="pytest -q"), t0 + 21)
-        assert first["kind"] == "progress"
-        assert first["text"] == (
-            "Claude sigue en openjarvis: editó b.py, ejecutó pytest -q y revisó "
-            "1 archivo."
+        idle = "x esc to interrupt"  # working, no spinner time
+        assert watcher.step("s", "openjarvis", idle, edit, t0, 60) is None
+        first = watcher.step("s", "openjarvis", idle, [("run", "pytest")], t0 + 21, 60)
+        assert (
+            first["text"] == "Claude sigue en openjarvis: editó b.py y ejecutó pytest."
         )
-        # Next one waits a full interval after the last update.
-        assert track(self._hook("Edit", file_path="/a/c.py"), t0 + 50) is None
-        second = track(self._hook("Edit", file_path="/a/d.py"), t0 + 82)
-        assert second["text"] == "Claude sigue en openjarvis: editó c.py y d.py."
+        assert watcher.step("s", "openjarvis", idle, edit, t0 + 50, 60) is None
+        second = watcher.step("s", "openjarvis", idle, [], t0 + 82, 60)
+        assert second["text"] == "Claude sigue en openjarvis: editó b.py."
 
-    def test_stop_clears_pending_progress(self) -> None:
-        router_mod._track_progress(self._hook("Edit", file_path="/a/b.py"), 1000.0)
-        router_mod.event_from_hook(
-            {"hook_event_name": "Stop", "session_id": "sess-p", "cwd": "/x/o"}
+    def test_heartbeat_during_long_thinking(self) -> None:
+        # Seen for the first time 12 min into the turn: no tool calls at all.
+        event = watcher.step("s", "openjarvis", self.SCREEN_WORKING, [], 5000.0, 60)
+        assert event["text"] == (
+            "Claude sigue trabajando en openjarvis; lleva 12 minutos."
         )
-        assert "sess-p" not in router_mod._progress
+        assert (
+            watcher.step("s", "openjarvis", self.SCREEN_WORKING, [], 5060.0, 60) is None
+        )
 
-    def test_disabled_with_zero_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(router_mod, "_progress_interval", lambda: 0.0)
-        assert router_mod._track_progress(self._hook("Edit"), 1000.0) is None
-        assert router_mod._progress == {}
+    def test_idle_screen_resets(self) -> None:
+        watcher.step("s", "p", "esc to interrupt", [("edit", "a")], 1000.0, 60)
+        assert watcher.step("s", "p", self.SCREEN_IDLE, [], 1030.0, 60) is None
+        assert watcher._state["s"]["actions"] == []
 
-    def test_hooks_include_post_tool_use(self, tmp_path: Path) -> None:
+    def test_read_new_actions_skips_history(self, tmp_path: Path) -> None:
+        path = tmp_path / "t.jsonl"
+        old = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Edit",
+                        "input": {"file_path": "/old.py"},
+                    }
+                ]
+            },
+        }
+        path.write_text(json.dumps(old) + "\n")
+        st: dict = {}
+        assert watcher.read_new_actions(st, path) == []  # history not replayed
+        new = {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Bash",
+                        "input": {"command": "pytest -q"},
+                    }
+                ]
+            },
+        }
+        with path.open("a") as fh:
+            fh.write(json.dumps(new) + "\n")
+            fh.write('{"type": "assistant", "mess')  # partial line
+        assert watcher.read_new_actions(st, path) == [("run", "pytest -q")]
+        with path.open("a") as fh:
+            fh.write('age": {"content": []}}\n')
+        assert watcher.read_new_actions(st, path) == []
+        assert st["partial"] == ""
+
+    def test_hooks_only_stop_and_notification(self, tmp_path: Path) -> None:
         with patch.object(sc, "_HOOKS_FILE", tmp_path / "hooks.json"):
             data = json.loads(sc.hooks_settings_file().read_text())
-        assert "PostToolUse" in data["hooks"]
+        assert set(data["hooks"]) == {"Stop", "Notification"}
 
 
 class TestAntigravitySessions:
@@ -341,3 +376,36 @@ class TestAntigravitySessions:
             )
         assert "Antigravity CLI in openjarvis" in res.content
         assert "revisando README" in res.content
+
+
+class TestTranscriptSelection:
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+        from openjarvis.tools import coding_sessions as cs
+
+        monkeypatch.setattr(watcher, "_transcripts", {})
+        monkeypatch.setattr(cs, "CLAUDE_DIR", tmp_path)
+        self.folder = tmp_path / cs._claude_slug("/x/openjarvis")
+        self.folder.mkdir()
+
+    def test_uses_session_id_not_newest_file(self) -> None:
+        mine = self.folder / "11111111-1111-1111-1111-111111111111.jsonl"
+        other = self.folder / "22222222-2222-2222-2222-222222222222.jsonl"
+        mine.write_text("{}\n")
+        other.write_text("{}\n")  # newer, but belongs to another session
+        with patch.object(sc, "claude_session_id", return_value=mine.stem):
+            assert watcher._transcript_for("jarvis-openjarvis", "/x/openjarvis") == mine
+
+    def test_hook_transcript_wins(self, tmp_path: Path) -> None:
+        resumed = tmp_path / "resumed.jsonl"
+        resumed.write_text("{}\n")
+        watcher.remember_transcript("/x/openjarvis", str(resumed))
+        with patch.object(sc, "claude_session_id", return_value="nope"):
+            assert (
+                watcher._transcript_for("jarvis-openjarvis", "/x/openjarvis") == resumed
+            )
+
+    def test_no_guessing_without_id(self) -> None:
+        (self.folder / "33333333-3333-3333-3333-333333333333.jsonl").write_text("{}\n")
+        with patch.object(sc, "claude_session_id", return_value=""):
+            assert watcher._transcript_for("jarvis-openjarvis", "/x/openjarvis") is None

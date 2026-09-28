@@ -18,7 +18,8 @@ interface SessionEvent {
 /// queued (a later progress, or the final "terminó") — skip it.
 function isSuperseded(event: SessionEvent, queue: SessionEvent[]): boolean {
   return event.kind === 'progress'
-    && queue.some((e) => e.session_id === event.session_id && e.id > event.id);
+    && queue.some((e) => e.id > event.id
+      && (e.session_id === event.session_id || e.project === event.project));
 }
 
 /// Speaks events from the coding sessions JARVIS started ("Claude terminó
@@ -40,9 +41,17 @@ export function useSessionAnnouncements(enabled: boolean) {
 
     const tick = async () => {
       try {
-        const res = await fetch(
-          `${getBase()}/v1/coding-sessions/events?after=${lastId ?? 0}`,
-        );
+        // client=app lets the backend report when the app last polled, its
+        // presence and queue (GET /v1/coding-sessions/status) for debugging.
+        const st = useAppStore.getState();
+        const diag = new URLSearchParams({
+          after: String(lastId ?? 0),
+          client: 'app',
+          presence: presenceOf(st),
+          pending: String(pending.length),
+          tts: st.settings.ttsEnabled ? '1' : '0',
+        });
+        const res = await fetch(`${getBase()}/v1/coding-sessions/events?${diag}`);
         if (res.ok) {
           const data: { events: SessionEvent[]; last_id: number } = await res.json();
           // Skip whatever happened before the app opened.
