@@ -267,3 +267,80 @@ class TestProgress:
         with patch.object(sc, "_HOOKS_FILE", tmp_path / "hooks.json"):
             data = json.loads(sc.hooks_settings_file().read_text())
         assert "PostToolUse" in data["hooks"]
+
+
+class TestAntigravitySessions:
+    LIVE = [
+        ("jarvis-openjarvis", "/p"),
+        ("jarvis-openjarvis-agy", "/p"),
+        ("jarvis-dadomatch-agy", "/q"),
+    ]
+
+    def test_names_do_not_collide(self) -> None:
+        p = Path("/x/AI/openjarvis/repo")
+        assert sc.session_name(p, "claude") == "jarvis-openjarvis"
+        assert sc.session_name(p, "antigravity") == "jarvis-openjarvis-agy"
+        assert sc.session_cli("jarvis-openjarvis-agy") == "antigravity"
+        assert sc.session_cli("jarvis-openjarvis") == "claude"
+
+    def test_resolve_prefers_claude_unless_asked(self) -> None:
+        with patch.object(sc, "list_sessions", return_value=self.LIVE):
+            assert sc.resolve_session("openjarvis") == ("jarvis-openjarvis", [])
+            assert sc.resolve_session("openjarvis", "antigravity") == (
+                "jarvis-openjarvis-agy",
+                [],
+            )
+            assert sc.resolve_session("dadomatch") == ("jarvis-dadomatch-agy", [])
+
+    def test_send_to_antigravity(self) -> None:
+        with (
+            patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
+            patch.object(sc, "list_sessions", return_value=self.LIVE),
+            patch.object(sc, "type_message") as typed,
+            patch.object(sc, "capture_screen", return_value=""),
+            patch.object(sc.time, "sleep"),
+        ):
+            res = sc.SendToSessionTool().execute(
+                project="openjarvis", cli="gemini", message="revisa el README"
+            )
+        assert res.success
+        typed.assert_called_once_with("jarvis-openjarvis-agy", "revisa el README")
+
+    def test_antigravity_approvals_go_to_terminal(self) -> None:
+        with (
+            patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
+            patch.object(sc, "list_sessions", return_value=self.LIVE),
+            patch.object(sc, "press_keys") as pressed,
+        ):
+            res = sc.SendToSessionTool().execute(
+                project="openjarvis", cli="antigravity", keys="approve"
+            )
+            assert not res.success and "terminal" in res.content
+            pressed.assert_not_called()
+        # interrupt is allowed for Antigravity
+        with (
+            patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
+            patch.object(sc, "list_sessions", return_value=self.LIVE),
+            patch.object(sc, "press_keys") as pressed,
+            patch.object(sc, "capture_screen", return_value=""),
+            patch.object(sc.time, "sleep"),
+        ):
+            assert (
+                sc.SendToSessionTool()
+                .execute(project="openjarvis", cli="antigravity", keys="interrupt")
+                .success
+            )
+        pressed.assert_called_once_with("jarvis-openjarvis-agy", ["Escape"])
+
+    def test_coding_sessions_reports_agy_screen(self) -> None:
+        from openjarvis.tools import coding_sessions as cs
+
+        with (
+            patch.object(sc, "list_sessions", return_value=self.LIVE),
+            patch.object(sc, "capture_screen", return_value="> revisando README"),
+        ):
+            res = cs.CodingSessionsTool().execute(
+                action="status", project="openjarvis", cli="antigravity"
+            )
+        assert "Antigravity CLI in openjarvis" in res.content
+        assert "revisando README" in res.content

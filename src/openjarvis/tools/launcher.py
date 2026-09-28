@@ -547,7 +547,7 @@ class StartCodingSessionTool(BaseTool):
         try:
             if sc.tmux_bin():
                 # Inside tmux so send_to_session can type into it later.
-                tmux_name = sc.session_name(project)
+                tmux_name = sc.session_name(project, cli)
                 if sc.has_session(tmux_name):
                     if task:
                         sc.type_message(tmux_name, task)

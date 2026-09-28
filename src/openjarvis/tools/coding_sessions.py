@@ -509,11 +509,39 @@ def describe(s: Session, detailed: bool, now: Optional[float] = None) -> str:
     return "\n".join(lines)
 
 
+def _antigravity_sessions(project: str = "") -> List[str]:
+    """Live ``jarvis-*-agy`` tmux sessions, optionally for one project."""
+    from openjarvis.tools import session_control as sc
+
+    names = [n for n, _ in sc.list_sessions() if sc.session_cli(n) == "antigravity"]
+    target = _norm(project)
+    return [n for n in names if not target or target in _norm(n)]
+
+
+def _agy_line(name: str) -> str:
+    project = name[len("jarvis-") : -len("-agy")]
+    return f"Antigravity CLI in {project} — terminal open (tmux {name})"
+
+
+def _agy_screen(name: str) -> str:
+    """Antigravity keeps no readable transcript, so report its screen."""
+    from openjarvis.tools import session_control as sc
+
+    screen = sc.capture_screen(name, lines=30)
+    return f"{_agy_line(name)}\n  Terminal screen now:\n{screen or '(empty)'}"
+
+
+def _has_claude_match(project: str, hours: float, now: float) -> bool:
+    return bool(filter_sessions(find_sessions(hours, now), project=project))
+
+
 def _tmux_screen(s: Session) -> str:
     """Screen of the JARVIS tmux session running ``s``, if any."""
     from openjarvis.tools import session_control as sc
 
     for name, path in sc.list_sessions():
+        if sc.session_cli(name) != "claude":
+            continue  # transcripts here are Claude's; agy is read by screen
         if path == s.cwd or name == sc.session_name(Path(s.cwd)):
             return sc.capture_screen(name, lines=15)
     return ""
@@ -552,7 +580,7 @@ class CodingSessionsTool(BaseTool):
                     },
                     "cli": {
                         "type": "string",
-                        "enum": ["claude", "gemini"],
+                        "enum": ["claude", "gemini", "antigravity"],
                         "description": "Optional filter.",
                     },
                     "session_id": {
@@ -577,12 +605,40 @@ class CodingSessionsTool(BaseTool):
         except (TypeError, ValueError):
             hours = 12.0
         now = time.time()
+        project = str(params.get("project") or "")
+        cli = str(params.get("cli") or "").lower()
+        agy = [] if cli in ("claude", "gemini") else _antigravity_sessions(project)
+        if cli == "antigravity" or (
+            agy
+            and action == "status"
+            and not cli
+            and not _has_claude_match(project, hours, now)
+        ):
+            if not agy:
+                return ToolResult(
+                    tool_name=tool,
+                    content="No Antigravity session started by JARVIS is running.",
+                    success=True,
+                )
+            if action == "status":
+                name = agy[0]
+                screen = _agy_screen(name)
+                return ToolResult(tool_name=tool, content=screen, success=True)
+            body = "\n".join(f"- {_agy_line(n)}" for n in agy)
+            return ToolResult(
+                tool_name=tool, content=f"{len(agy)} session(s):\n{body}", success=True
+            )
         sessions = filter_sessions(
             find_sessions(hours, now),
-            project=str(params.get("project") or ""),
-            cli=str(params.get("cli") or ""),
+            project=project,
+            cli=cli,
             session_id=str(params.get("session_id") or ""),
         )
+        if not sessions and agy:
+            body = "\n".join(f"- {_agy_line(n)}" for n in agy)
+            return ToolResult(
+                tool_name=tool, content=f"{len(agy)} session(s):\n{body}", success=True
+            )
         if not sessions:
             return ToolResult(
                 tool_name=tool,
@@ -599,7 +655,10 @@ class CodingSessionsTool(BaseTool):
                 content += f"\n  Terminal screen now (tmux):\n{screen}"
             return ToolResult(tool_name=tool, content=content, success=True)
         shown = sessions[:10]
-        body = "\n".join(f"- {describe(s, False, now)}" for s in shown)
+        body = "\n".join(
+            [f"- {describe(s, False, now)}" for s in shown]
+            + [f"- {_agy_line(n)}" for n in agy]
+        )
         more = (
             f"\n(+{len(sessions) - len(shown)} older)"
             if len(sessions) > len(shown)
