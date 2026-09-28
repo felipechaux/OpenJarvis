@@ -127,7 +127,8 @@ class EdgeTTSBackend(TTSBackend):
             if any(n in actual_voice for n in ("Sonia", "Libby", "Aria")):
                 actual_voice = "es-ES-ElviraNeural"
             else:
-                actual_voice = "es-ES-AlvaroNeural"
+                # Latin-American dub J.A.R.V.I.S.
+                actual_voice = "es-MX-JorgeNeural"
 
 
         # Per-call prosody overrides the instance defaults (which already

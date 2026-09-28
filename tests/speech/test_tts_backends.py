@@ -147,13 +147,13 @@ def test_edge_tts_synthesize_autoswitch():
             pitch="-8Hz",
         )
 
-        # 2. Spanish text + English male voice -> switches to Spain Spanish
+        # 2. Spanish text + English male voice -> switches to Latin-American Spanish
         backend.synthesize(
             "He consultado su correo, señor.", voice_id="en-GB-RyanNeural"
         )
         mock_comm.assert_called_with(
             "He consultado su correo, señor.",
-            voice="es-ES-AlvaroNeural",
+            voice="es-MX-JorgeNeural",
             rate="-6%",
             pitch="-8Hz",
         )
