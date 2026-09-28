@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Outlet, useNavigate } from 'react-router';
+import { Outlet, useLocation, useNavigate } from 'react-router';
 import { Sidebar } from './Sidebar/Sidebar';
 import { SystemPulse } from './SystemPulse';
 import { TitleBar } from './TitleBar';
 import { useAppStore } from '../lib/store';
-import { checkHealth, isTauri } from '../lib/api';
+import { checkHealth } from '../lib/api';
 
 export function Layout() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
@@ -23,12 +23,10 @@ export function Layout() {
   }, []);
 
   const navigate = useNavigate();
+  const location = useLocation();
 
   return (
-    <div
-      className="flex flex-col h-full w-full overflow-hidden relative"
-      style={{ borderRadius: isTauri() ? 10 : 0, overflow: 'hidden' }}
-    >
+    <div className="flex flex-col h-full w-full overflow-hidden relative">
       <div className="hud-backdrop" aria-hidden="true" />
       <TitleBar />
       <SystemPulse apiReachable={apiReachable} />
@@ -67,7 +65,10 @@ export function Layout() {
           />
         )}
         <main className="flex-1 flex flex-col min-w-0 h-full relative overflow-hidden" style={{ background: 'transparent' }}>
-          <div className="flex-1 flex flex-col min-w-0 min-h-0 relative z-[2]">
+          <div
+            key={location.pathname}
+            className="jarvis-page flex-1 flex flex-col min-w-0 min-h-0 relative z-[2]"
+          >
             <Outlet />
           </div>
         </main>

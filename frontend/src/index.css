@@ -52,6 +52,16 @@
   color-scheme: dark;
 }
 
+/* ─── DESKTOP VIBRANCY ───────────────────────────────────────────────────── */
+/* Inside the Tauri shell the window has a native macOS hudWindow blur behind
+   it — make the main surfaces translucent so the vibrancy shows through. */
+html.tauri {
+  --color-sidebar: rgba(3, 8, 18, 0.82);
+}
+html.tauri body {
+  background-color: rgba(3, 8, 18, 0.72);
+}
+
 /* Disable light overrides — JARVIS is always dark */
 @media (prefers-color-scheme: light) {
   :root:not(.light) {
@@ -124,6 +134,90 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* User message entrance — slides in from the right with a slight settle */
+@keyframes jarvis-msg-in-user {
+  from { opacity: 0; transform: translateX(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+/* Page/route transition — materialize: rise + de-blur */
+@keyframes jarvis-page-in {
+  from { opacity: 0; transform: translateY(10px); filter: blur(6px); }
+  to   { opacity: 1; transform: translateY(0); filter: blur(0); }
+}
+.jarvis-page {
+  animation: jarvis-page-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* ─── MICRO-INTERACTIONS ─────────────────────────────────────────────────── */
+/* Tactile press feedback on every button */
+button:not(:disabled):active {
+  transform: scale(0.96);
+}
+button {
+  transition: color 0.15s, background-color 0.15s, border-color 0.15s,
+    box-shadow 0.2s, transform 0.12s, opacity 0.15s;
+}
+
+/* Input shell — lifts and glows while focused */
+.jarvis-input-shell {
+  transition: border-color 0.2s, box-shadow 0.25s, transform 0.2s;
+}
+.jarvis-input-shell:focus-within {
+  border-color: rgba(0, 212, 255, 0.45) !important;
+  box-shadow:
+    0 0 0 1px rgba(0, 212, 255, 0.22),
+    0 0 28px -6px rgba(0, 212, 255, 0.35),
+    0 10px 32px -14px rgba(0, 0, 0, 0.85) !important;
+  transform: translateY(-1px);
+}
+
+/* Send button — charged pulse when there is text ready to fire */
+@keyframes jarvis-send-pulse {
+  0%, 100% { box-shadow: 0 0 10px rgba(0, 212, 255, 0.35); }
+  50%      { box-shadow: 0 0 24px rgba(0, 212, 255, 0.6); }
+}
+.jarvis-send-ready {
+  animation: jarvis-send-pulse 2.2s ease-in-out infinite;
+}
+.jarvis-send-ready:hover {
+  transform: translateY(-1px);
+}
+
+/* Sidebar nav items — subtle slide on hover */
+.jarvis-nav-item {
+  transition: background-color 0.15s, color 0.15s, transform 0.18s;
+}
+.jarvis-nav-item:hover {
+  transform: translateX(3px);
+}
+
+/* Titlebar — animated hairline sweep along the bottom edge */
+.titlebar::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(0, 212, 255, 0.55), transparent);
+  background-size: 200% 100%;
+  animation: hud-sweep 7s linear infinite;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jarvis-page,
+  .jarvis-send-ready,
+  .titlebar::after {
+    animation: none !important;
+  }
+  .jarvis-nav-item:hover,
+  .jarvis-input-shell:focus-within,
+  button:not(:disabled):active {
+    transform: none;
+  }
+}
+
 /* Arc reactor outer ring spin */
 @keyframes jarvis-ring-cw  { from { transform: rotate(0deg);   } to { transform: rotate(360deg);  } }
 @keyframes jarvis-ring-ccw { from { transform: rotate(360deg); } to { transform: rotate(0deg);    } }
@@ -189,17 +283,18 @@
   animation: jarvis-pulse-ring 2s ease-in-out infinite;
 }
 
-/* Window control buttons */
-.jarvis-wbtn {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  border: none;
-  cursor: pointer;
-  transition: filter 0.15s;
-  flex-shrink: 0;
+/* Keyboard shortcut chip (empty-state hints) */
+.jarvis-kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  margin-right: 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: rgba(0, 212, 255, 0.05);
+  color: var(--color-text-secondary);
+  font-family: var(--font-hud);
+  font-size: 0.6rem;
 }
-.jarvis-wbtn:hover { filter: brightness(1.25); }
 
 /* Glowing input */
 input, textarea {

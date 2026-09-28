@@ -121,6 +121,7 @@ export function ChatArea() {
                 }}
               >
                 {getGreeting()}
+                <span className="hud-caret" />
               </h2>
               <p className="text-xs text-center max-w-xs" style={{ color: 'var(--color-text-tertiary)', letterSpacing: '0.05em' }}>
                 ALL SYSTEMS OPERATIONAL · AWAITING INPUT
@@ -177,6 +178,23 @@ export function ChatArea() {
                 <MessageSquare size={13} style={{ color: 'var(--color-accent)' }} />
                 CHANNELS
               </button>
+            </div>
+
+            {/* Keyboard shortcut hints */}
+            <div
+              className="mt-10 flex items-center gap-5"
+              style={{
+                fontFamily: 'var(--font-hud)',
+                fontSize: '0.6rem',
+                letterSpacing: '0.15em',
+                color: 'var(--color-text-tertiary)',
+                animation: 'jarvis-msg-in 0.5s ease-out both 0.6s',
+                opacity: 0,
+              }}
+            >
+              <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}K</kbd> COMMANDS</span>
+              <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘' : 'Ctrl'}I</kbd> SYSTEM PANEL</span>
+              <span><kbd className="jarvis-kbd">{navigator.platform.includes('Mac') ? '⌘⇧' : 'Ctrl+Shift+'}SPACE</kbd> OVERLAY</span>
             </div>
           </div>
         ) : (

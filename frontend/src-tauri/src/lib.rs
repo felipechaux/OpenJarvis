@@ -1978,6 +1978,15 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        .on_window_event(|window, event| {
+            // The red traffic light hides the window instead of closing it so
+            // the Ollama + jarvis background services keep running.  Quitting
+            // for real goes through the tray's "Quit" item or Cmd+Q.
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let _ = window.hide();
+                api.prevent_close();
+            }
+        })
         .setup(move |app| {
             // System tray
             let show = MenuItemBuilder::with_id("show", "Show / Hide").build(app)?;

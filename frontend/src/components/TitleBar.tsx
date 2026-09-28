@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react';
 import { isTauri } from '../lib/api';
 
+const IS_MAC = navigator.userAgent.includes('Mac');
+
+const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+
 export function TitleBar() {
   const [time, setTime] = useState(() => new Date());
 
@@ -9,93 +14,49 @@ export function TitleBar() {
     return () => clearInterval(t);
   }, []);
 
-  const close = async () => {
-    console.log('Close clicked');
-    if (!isTauri()) return;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      // On macOS, it's common to hide the main window instead of closing it 
-      // to keep background services running.
-      await win.hide();
-    } catch (err) {
-      console.error('Failed to hide window:', err);
-    }
-  };
-
-  const minimize = async () => {
-    console.log('Minimize clicked');
-    if (!isTauri()) return;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      await getCurrentWindow().minimize();
-    } catch (err) {
-      console.error('Failed to minimize window:', err);
-    }
-  };
-
-  const maximize = async () => {
-    console.log('Maximize clicked');
-    if (!isTauri()) return;
-    try {
-      const { getCurrentWindow } = await import('@tauri-apps/api/window');
-      const win = getCurrentWindow();
-      if (await win.isMaximized()) await win.unmaximize();
-      else await win.maximize();
-    } catch (err) {
-      console.error('Failed to maximize window:', err);
-    }
-  };
-
   const hh = String(time.getHours()).padStart(2, '0');
   const mm = String(time.getMinutes()).padStart(2, '0');
   const ss = String(time.getSeconds()).padStart(2, '0');
+  const dateStr = `${DAYS[time.getDay()]} ${String(time.getDate()).padStart(2, '0')} ${MONTHS[time.getMonth()]}`;
+
+  // On macOS the native traffic lights are overlaid on the top-left of the
+  // webview (titleBarStyle: Overlay) — reserve space so nothing renders
+  // underneath them.
+  const leftInset = isTauri() && IS_MAC ? 76 : 12;
 
   return (
     <div
       className="titlebar flex items-center justify-between shrink-0 select-none relative"
       style={{
         height: 38,
-        padding: '0 12px',
-        background: 'rgba(2, 6, 14, 0.92)',
+        padding: `0 12px 0 ${leftInset}px`,
+        background: 'rgba(2, 6, 14, 0.75)',
         borderBottom: '1px solid var(--color-border)',
         zIndex: 50,
       }}
     >
-      {/* Separate drag region that doesn't overlap the interactive buttons */}
-      <div 
-        data-tauri-drag-region 
-        className="absolute inset-0 z-0"
-        style={{ pointerEvents: 'auto' }}
-      />
+      {/* Drag region — covers the whole bar; interactive children sit above it */}
+      <div data-tauri-drag-region className="absolute inset-0 z-0" />
 
-      {/* Left: window controls (Tauri only) or spacer */}
-      {isTauri() ? (
-        <div className="flex items-center gap-1.5 z-10 relative" style={{ minWidth: 56 }}>
-          <button 
-            onClick={(e) => { e.stopPropagation(); close(); }} 
-            className="jarvis-wbtn" 
-            style={{ background: '#ff5f57' }} 
-            title="Close" 
-          />
-          <button 
-            onClick={(e) => { e.stopPropagation(); minimize(); }} 
-            className="jarvis-wbtn" 
-            style={{ background: '#febc2e' }} 
-            title="Minimize" 
-          />
-          <button 
-            onClick={(e) => { e.stopPropagation(); maximize(); }} 
-            className="jarvis-wbtn" 
-            style={{ background: '#28c840' }} 
-            title="Maximize" 
-          />
-        </div>
-      ) : (
-        <div className="z-10 relative" style={{ minWidth: 56 }} />
-      )}
+      {/* Left: status readout */}
+      <div
+        className="z-10 relative flex items-center gap-2"
+        style={{ pointerEvents: 'none', minWidth: 110 }}
+      >
+        <span className="hud-heartbeat" style={{ width: 5, height: 5 }} />
+        <span
+          style={{
+            fontFamily: 'var(--font-hud)',
+            fontSize: '0.6rem',
+            letterSpacing: '0.18em',
+            color: 'var(--color-text-tertiary)',
+          }}
+        >
+          SYSTEMS ONLINE
+        </span>
+      </div>
 
-      {/* Center: branding — drag region */}
+      {/* Center: branding */}
       <div
         className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2.5 z-10"
         style={{ pointerEvents: 'none' }}
@@ -135,16 +96,22 @@ export function TitleBar() {
         </div>
       </div>
 
-      {/* Right: clock */}
-      <div className="z-10 relative" style={{
-        fontFamily: 'var(--font-hud)',
-        fontSize: '0.65rem',
-        color: 'var(--color-text-tertiary)',
-        letterSpacing: '0.1em',
-        minWidth: 70,
-        textAlign: 'right',
-      }}>
-        {hh}:{mm}:{ss}
+      {/* Right: date + clock */}
+      <div
+        className="z-10 relative flex items-center gap-3"
+        style={{
+          pointerEvents: 'none',
+          fontFamily: 'var(--font-hud)',
+          fontSize: '0.65rem',
+          letterSpacing: '0.1em',
+          minWidth: 110,
+          justifyContent: 'flex-end',
+        }}
+      >
+        <span style={{ color: 'var(--color-text-tertiary)', opacity: 0.7 }}>{dateStr}</span>
+        <span className="hud-mono" style={{ color: 'var(--color-text-secondary)' }}>
+          {hh}:{mm}:<span style={{ color: 'var(--color-accent)' }}>{ss}</span>
+        </span>
       </div>
     </div>
   );

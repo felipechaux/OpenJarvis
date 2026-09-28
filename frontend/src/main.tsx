@@ -3,8 +3,14 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import App from './App';
-import { initApiBase } from './lib/api';
+import { initApiBase, isTauri } from './lib/api';
 import './index.css';
+
+// Mark the document when running inside the desktop shell so CSS can make
+// surfaces translucent over the native macOS vibrancy (hudWindow) material.
+if (isTauri()) {
+  document.documentElement.classList.add('tauri');
+}
 
 function applyTheme() {
   try {
