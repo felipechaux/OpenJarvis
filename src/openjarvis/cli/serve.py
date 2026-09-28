@@ -163,6 +163,37 @@ def serve(
         except Exception as exc:
             logger.debug("Ollama secondary attach failed: %s", exc)
 
+    # Keep the Claude Code CLI engine and a local Ollama selectable whatever
+    # the primary is (e.g. primary ``claude_cli`` + cloud keys would otherwise
+    # drop Ollama; primary ``cloud`` would otherwise drop ``claude-cli/*``).
+    try:
+        from openjarvis.core.registry import EngineRegistry
+        from openjarvis.engine._discovery import _make_engine
+        from openjarvis.engine.multi import MultiEngine
+
+        if isinstance(engine, MultiEngine):
+            _present = {k for k, _ in engine._engines}
+        else:
+            _present = {engine_name}
+        _extras = []
+        for _key in ("claude_cli", "ollama"):
+            if _key in _present or not EngineRegistry.contains(_key):
+                continue
+            _cand = _make_engine(_key, config)
+            if _cand.health():
+                _extras.append((_key, _cand))
+        if _extras:
+            if isinstance(engine, MultiEngine):
+                engine._engines.extend(_extras)
+                engine._refresh_map()
+            else:
+                engine = MultiEngine([(engine_name, engine), *_extras])
+                engine_name = "multi"
+            for _key, _ in _extras:
+                console.print(f"  Extra:  [cyan]{_key}[/cyan] attached")
+    except Exception as exc:
+        logger.debug("Secondary engine attach failed: %s", exc)
+
     # Wrap engine with InstrumentedEngine for telemetry recording
     try:
         from openjarvis.telemetry.instrumented_engine import InstrumentedEngine

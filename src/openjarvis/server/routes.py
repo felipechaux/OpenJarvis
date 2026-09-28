@@ -617,9 +617,11 @@ async def list_models(request: Request) -> ModelListResponse:
 
     # Put the configured default model first so the UI selects it by default.
     default_model = getattr(request.app.state, "model", "") or "claude-sonnet-4-6"
-    priority = [m for m in cloud_ids if m == default_model]
+    # (The default may also be a local-chain model such as ``claude-cli/*``.)
+    priority = [m for m in cloud_ids + local_ids if m == default_model][:1]
     rest_cloud = [m for m in cloud_ids if m != default_model]
-    all_model_ids = priority + rest_cloud + local_ids
+    rest_local = [m for m in local_ids if m != default_model]
+    all_model_ids = priority + rest_cloud + rest_local
     return ModelListResponse(
         data=[ModelObject(id=mid) for mid in all_model_ids],
     )

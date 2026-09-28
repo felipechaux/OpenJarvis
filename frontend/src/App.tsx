@@ -77,8 +77,29 @@ export default function App() {
           if (m.length > 0) {
             setModels(m);
             const ids = new Set(m.map((x) => x.id));
-            if (!selectedModel || !ids.has(selectedModel)) {
-              setSelectedModel(m[0].id);
+            // Follow the server's configured default (``/v1/info``) whenever
+            // it changes — e.g. switching ``default_model`` in config.toml —
+            // while keeping the user's own pick until the next change.
+            const LAST_DEFAULT_KEY = 'openjarvis-server-default-model';
+            let serverDefault = '';
+            try {
+              serverDefault = (await fetchServerInfo()).model || '';
+            } catch {
+              // info endpoint unavailable — keep the saved selection
+            }
+            if (cancelled) return;
+            let adoptDefault = false;
+            try {
+              if (serverDefault && localStorage.getItem(LAST_DEFAULT_KEY) !== serverDefault) {
+                localStorage.setItem(LAST_DEFAULT_KEY, serverDefault);
+                adoptDefault = true;
+              }
+            } catch {
+              // storage unavailable — skip
+            }
+            const fallback = serverDefault && ids.has(serverDefault) ? serverDefault : m[0].id;
+            if (!selectedModel || !ids.has(selectedModel) || adoptDefault) {
+              setSelectedModel(fallback);
             }
             setModelsLoading(false);
             return;
