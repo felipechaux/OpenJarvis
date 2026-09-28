@@ -46,7 +46,11 @@ echo "[dev] vite ready on :5173"
 
 echo "[dev] building Rust binary..."
 cd "$SRC_TAURI"
-cargo build 2>&1 \
+# --no-default-features drops ``custom-protocol`` (on by default in
+# Cargo.toml for release bundles).  With it, the binary embeds the stale
+# ``../dist`` build instead of loading vite's devUrl, so frontend changes
+# never show up in the dev app.
+cargo build --no-default-features 2>&1 \
     | grep -vE "warning|note|help|\\^|--" \
     | tail -10
 
