@@ -817,6 +817,9 @@ class LauncherConfig:
     app_aliases: Dict[str, str] = field(default_factory=dict)
     # Terminal app ``start_coding_session`` opens (Terminal.app is scriptable).
     terminal: str = "Terminal"
+    # Spoken progress while a JARVIS-started Claude session works: at most one
+    # summary every this many seconds (0 = only "finished" / "needs permission").
+    progress_interval_s: float = 60.0
 
 
 @dataclass

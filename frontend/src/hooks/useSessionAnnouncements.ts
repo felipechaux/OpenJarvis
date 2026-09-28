@@ -8,9 +8,17 @@ const POLL_MS = 4000;
 
 interface SessionEvent {
   id: number;
-  kind: string;
+  kind: string; // 'progress' | 'stop' | 'notification'
   project: string;
+  session_id: string;
   text: string;
+}
+
+/// A progress update is stale once a newer event from the same session is
+/// queued (a later progress, or the final "terminó") — skip it.
+function isSuperseded(event: SessionEvent, queue: SessionEvent[]): boolean {
+  return event.kind === 'progress'
+    && queue.some((e) => e.session_id === event.session_id && e.id > event.id);
 }
 
 /// Speaks events from the coding sessions JARVIS started ("Claude terminó
@@ -48,7 +56,8 @@ export function useSessionAnnouncements(enabled: boolean) {
       const state = useAppStore.getState();
       if (cancelled || announcing || !pending.length) return;
       if (presenceOf(state) !== 'idle') return;
-      const event = pending.shift()!;
+      let event = pending.shift()!;
+      while (isSuperseded(event, pending)) event = pending.shift()!;
       state.addLogEntry({
         timestamp: Date.now(), level: 'info', category: 'tool',
         message: event.text,

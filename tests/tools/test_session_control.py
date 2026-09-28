@@ -92,7 +92,7 @@ class TestLaunchCommand:
             data = json.loads(sc.hooks_settings_file().read_text())
         command = data["hooks"]["Stop"][0]["hooks"][0]["command"]
         assert "/v1/coding-sessions/events" in command and "|| true" in command
-        assert set(data["hooks"]) == {"Stop", "Notification"}
+        assert set(data["hooks"]) == {"Stop", "Notification", "PostToolUse"}
 
 
 @pytest.mark.skipif(shutil.which("tmux") is None, reason="tmux not installed")
@@ -203,3 +203,67 @@ class TestEventsRouter:
         assert client.post(
             "/v1/coding-sessions/events", content=b"not json"
         ).json() == {"accepted": False}
+
+
+class TestProgress:
+    def _hook(self, tool: str, **args) -> dict:
+        return {
+            "hook_event_name": "PostToolUse",
+            "session_id": "sess-p",
+            "cwd": "/x/openjarvis/repo",
+            "tool_name": tool,
+            "tool_input": args,
+        }
+
+    @pytest.fixture(autouse=True)
+    def _fresh(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(router_mod, "_progress", {})
+        monkeypatch.setattr(router_mod, "_progress_interval", lambda: 60.0)
+
+    def test_summary_groups_actions(self) -> None:
+        actions = [
+            router_mod.describe_action("Read", {"file_path": "/a/x.py"}),
+            router_mod.describe_action("Edit", {"file_path": "/a/launcher.py"}),
+            router_mod.describe_action("Edit", {"file_path": "/a/launcher.py"}),
+            router_mod.describe_action("Bash", {"description": "Run the tests"}),
+        ]
+        assert router_mod.summarize_actions(actions) == (
+            "editó launcher.py, ejecutó Run the tests y revisó 1 archivo"
+        )
+        reads = [router_mod.describe_action("Grep", {})] * 3
+        assert router_mod.summarize_actions(reads) == (
+            "está revisando el código (3 lecturas)"
+        )
+
+    def test_first_update_after_20s_then_every_interval(self) -> None:
+        t0 = 1000.0
+        track = router_mod._track_progress
+        assert track(self._hook("Read", file_path="/a/x.py"), t0) is None
+        assert track(self._hook("Edit", file_path="/a/b.py"), t0 + 5) is None
+        first = track(self._hook("Bash", command="pytest -q"), t0 + 21)
+        assert first["kind"] == "progress"
+        assert first["text"] == (
+            "Claude sigue en openjarvis: editó b.py, ejecutó pytest -q y revisó "
+            "1 archivo."
+        )
+        # Next one waits a full interval after the last update.
+        assert track(self._hook("Edit", file_path="/a/c.py"), t0 + 50) is None
+        second = track(self._hook("Edit", file_path="/a/d.py"), t0 + 82)
+        assert second["text"] == "Claude sigue en openjarvis: editó c.py y d.py."
+
+    def test_stop_clears_pending_progress(self) -> None:
+        router_mod._track_progress(self._hook("Edit", file_path="/a/b.py"), 1000.0)
+        router_mod.event_from_hook(
+            {"hook_event_name": "Stop", "session_id": "sess-p", "cwd": "/x/o"}
+        )
+        assert "sess-p" not in router_mod._progress
+
+    def test_disabled_with_zero_interval(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(router_mod, "_progress_interval", lambda: 0.0)
+        assert router_mod._track_progress(self._hook("Edit"), 1000.0) is None
+        assert router_mod._progress == {}
+
+    def test_hooks_include_post_tool_use(self, tmp_path: Path) -> None:
+        with patch.object(sc, "_HOOKS_FILE", tmp_path / "hooks.json"):
+            data = json.loads(sc.hooks_settings_file().read_text())
+        assert "PostToolUse" in data["hooks"]
