@@ -375,6 +375,9 @@ class NativeReActAgent(ToolUsingAgent):
             tool_descriptions=tool_desc,
             skill_examples=skill_examples_block,
         )
+        omit_thoughts = _omits_written_reasoning(self._model)
+        if omit_thoughts:
+            react_instructions = _strip_thought_protocol(react_instructions)
 
         system_prompt = base_persona + "\n\n---\n\n" + react_instructions
 
@@ -384,7 +387,10 @@ class NativeReActAgent(ToolUsingAgent):
         for ex in load_few_shot_exemplars("native_react"):
             if ex.get("input") and ex.get("output"):
                 messages.insert(-1, Message(role=Role.USER, content=ex["input"]))
-                messages.insert(-1, Message(role=Role.ASSISTANT, content=ex["output"]))
+                output = ex["output"]
+                if omit_thoughts:
+                    output = _strip_thought_lines(output)
+                messages.insert(-1, Message(role=Role.ASSISTANT, content=output))
 
         all_tool_results: list[ToolResult] = []
         turns = 0
@@ -470,5 +476,39 @@ class NativeReActAgent(ToolUsingAgent):
             metadata={**total_usage, "messages": msg_dicts},
         )
 
+
+
+# Claude models (Opus 5.5 in particular) have safeguards that refuse requests
+# asking them to write out their internal reasoning ("[reasoning_extraction]"),
+# which the ``Thought:`` protocol line does.  The parser treats ``Thought:`` as
+# optional, so for those models we simply don't ask for it.
+_WRITTEN_REASONING_UNSUPPORTED_PREFIXES = ("claude-cli/", "claude-")
+
+_THOUGHT_LINE_RE = re.compile(r"^[ \t]*Thought:.*\n?", re.MULTILINE)
+
+
+def _omits_written_reasoning(model: str) -> bool:
+    return (model or "").startswith(_WRITTEN_REASONING_UNSUPPORTED_PREFIXES)
+
+
+def _strip_thought_lines(text: str) -> str:
+    return _THOUGHT_LINE_RE.sub("", text)
+
+
+def _strip_thought_protocol(prompt: str) -> str:
+    """Rewrite the ReAct instructions without the ``Thought:`` step."""
+    prompt = _strip_thought_lines(prompt)
+    prompt = prompt.replace(
+        "Match the user's language.  If the user writes in Spanish, "
+        "your `Thought:` and\n"
+        "`Final Answer:` content must be in Spanish",
+        "Match the user's language.  If the user writes in Spanish, your\n"
+        "`Final Answer:` content must be in Spanish",
+    )
+    prompt = prompt.replace("(`Thought:`, `Action:`,", "(`Action:`,")
+    return prompt + (
+        "\n\nDo not write out your reasoning.  Reply with only the `Action:` / "
+        "`Action Input:` lines or a `Final Answer:` line."
+    )
 
 __all__ = ["NativeReActAgent", "REACT_SYSTEM_PROMPT"]
