@@ -122,7 +122,45 @@ class TestEventsRouter:
                 "message": "Claude needs your permission to use Bash",
             }
         )
-        assert perm["text"] == "Claude pide permiso en dadomatch."
+        assert perm["text"] == "Claude pide permiso en dadomatch para usar Bash."
+
+    def test_stop_includes_summary_of_last_reply(self, tmp_path: Path) -> None:
+        transcript = tmp_path / "s.jsonl"
+        rows = [
+            {"type": "user", "cwd": "/x/openjarvis", "message": {"content": "arregla"}},
+            {
+                "type": "assistant",
+                "cwd": "/x/openjarvis",
+                "message": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Arreglé los **tests** de `coding_sessions`. "
+                            "Detalles:\n```py\nx=1\n```",
+                        }
+                    ]
+                },
+            },
+        ]
+        transcript.write_text("\n".join(json.dumps(r) for r in rows))
+        event = router_mod.event_from_hook(
+            {
+                "hook_event_name": "Stop",
+                "cwd": "/x/openjarvis",
+                "transcript_path": str(transcript),
+            }
+        )
+        # Too fresh: the reply may not be flushed yet, so it isn't served.
+        event = router_mod.add_event(event)
+        assert router_mod._finalize(event, event["ts"]) is False
+        assert router_mod._finalize(event, event["ts"] + 5) is True
+        assert event["text"] == (
+            "Claude terminó en openjarvis: Arreglé los tests de coding_sessions."
+        )
+
+    def test_summary_is_truncated(self) -> None:
+        long = "palabra " * 60
+        assert len(router_mod.summarize_reply(long, limit=50)) == 50
 
     def test_idle_notice_and_reentrant_stop_are_skipped(self) -> None:
         assert (
@@ -158,6 +196,10 @@ class TestEventsRouter:
             "events"
         ]
         assert [e["text"] for e in events] == ["Claude terminó en openjarvis."]
+        eid = events[0]["id"]
+        assert client.post(f"/v1/coding-sessions/events/{eid}/announced").json()["ok"]
+        after = client.get(f"/v1/coding-sessions/events?after={before}").json()
+        assert after["events"][0]["announced"] is True
         assert client.post(
             "/v1/coding-sessions/events", content=b"not json"
         ).json() == {"accepted": False}

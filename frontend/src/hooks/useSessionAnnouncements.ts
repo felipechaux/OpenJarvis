@@ -57,6 +57,10 @@ export function useSessionAnnouncements(enabled: boolean) {
       announcing = true;
       try {
         await speak(event.text);
+        // Tell the backend it was spoken (delivery can then be verified).
+        fetch(`${getBase()}/v1/coding-sessions/events/${event.id}/announced`, {
+          method: 'POST',
+        }).catch(() => {});
       } finally {
         announcing = false;
       }
