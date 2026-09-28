@@ -74,7 +74,7 @@ export function ChatPage() {
         weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
         hour: 'numeric', minute: '2-digit', hour12: true,
       });
-      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: DEBES llamar a 'digest_collect' (sources: ['gcalendar', 'gmail', 'weather']) inmediatamente. No existe ninguna herramienta 'get_weather': el clima llega por la fuente 'weather'.
+      const greetingPrompt = `JARVIS_WELCOME_TRIGGER: DEBES llamar inmediatamente a 'get_weather' (location: 'Bogotá', units: 'metric') y a 'digest_collect' (sources: ['gcalendar', 'gmail']).
 Formato: Reporta CADA correo y evento de calendario que aparezca en las salidas de las herramientas. Saluda al usuario como "señor Chaux".
 Hora local: ${localTime}.
 
@@ -82,7 +82,7 @@ INSTRUCCIONES DE BRIEFING:
 - Cada correo trae su pestaña de Gmail ([tab: Primary|Updates|Promotions|Social|Forums]) y su antigüedad ("2h ago"). Primero detalla los de Primary. De Updates/Promotions/Social menciona solo lo realmente relevante (empleo, seguridad de la cuenta, pagos) diciendo en qué pestaña están, y resume el resto con un conteo, sin enumerarlos.
 - Usa la antigüedad exactamente como la da la herramienta; no la recalcules ni la inventes.
 - Enumera todos los eventos de HOY y de MAÑANA con su hora exacta tal como la da la herramienta (marcados "Today"/"Tomorrow"); los de días posteriores solo si son relevantes.
-- Si hay datos de clima, menciona su impacto en la agenda.
+- Menciona el clima de Bogotá (temperatura en °C y condiciones) y su impacto en la agenda.
 
 REGLAS ABSOLUTAS:
 - NUNCA digas que faltan datos si las herramientas los devolvieron.
