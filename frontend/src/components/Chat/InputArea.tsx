@@ -6,7 +6,7 @@ import { fetchSavings, getBase } from '../../lib/api';
 import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useTTS, isLikelySelfEcho } from '../../hooks/useTTS';
-import { WAKE_EVENT, INTERRUPT_EVENT } from '../../hooks/useWakeWord';
+import { WAKE_EVENT, INTERRUPT_EVENT, markCommandSent } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 export function InputArea() {
@@ -158,6 +158,7 @@ export function InputArea() {
     const content = input.trim();
     if (!content || streamState.isStreaming) return;
 
+    markCommandSent();
     stopSpeaking();
     setInput('');
 

@@ -16,6 +16,16 @@ const NATIVE_READY_TIMEOUT_MS = 5000;
 // the ready event used to be missed).  Flip back to true once it detects.
 const USE_NATIVE_WAKE = false;
 
+// When the user's last message went out.  A wake word heard in audio that
+// started recording before then is the command itself ("¿cómo va el
+// proyecto Open Jarvis?") — Whisper finishes that chunk a second or two
+// after the send, and treating it as a new wake aborted the reply.
+let lastCommandSentAt = 0;
+
+export function markCommandSent(): void {
+  lastCommandSentAt = Date.now();
+}
+
 /// Subscribe to the native macOS wake-word sidecar.  Resolves to ``null``
 /// when:
 ///   - Tauri isn't reachable (browser preview / non-Tauri build)
@@ -100,7 +110,7 @@ export function useWakeWord(enabled: boolean) {
   const mimeRef = useRef('audio/webm');
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const processChunk = useCallback(async (blob: Blob) => {
+  const processChunk = useCallback(async (blob: Blob, startedAt: number) => {
     if (processingRef.current || blob.size < 1500) return;
     processingRef.current = true;
     try {
@@ -113,6 +123,10 @@ export function useWakeWord(enabled: boolean) {
       if (!res.ok) return;
       const data = await res.json();
       if (data.detected) {
+        if (startedAt < lastCommandSentAt) {
+          console.log('[WakeWord] Ignored wake inside the sent command:', data.text);
+          return;
+        }
         console.log('[WakeWord] Detected:', data.text);
         await focusWindow();
         window.dispatchEvent(new CustomEvent(WAKE_EVENT, { detail: data.text }));
@@ -139,9 +153,10 @@ export function useWakeWord(enabled: boolean) {
       if (e.data.size > 0) chunks.push(e.data);
     };
 
+    const startedAt = Date.now();
     recorder.onstop = () => {
       if (chunks.length > 0 && activeRef.current) {
-        processChunk(new Blob(chunks, { type: mime }));
+        processChunk(new Blob(chunks, { type: mime }), startedAt);
       }
       // Start the next cycle immediately after this one stops
       if (activeRef.current) {
