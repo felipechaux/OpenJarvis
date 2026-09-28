@@ -553,6 +553,26 @@ def serve(
             "authenticated requests to your instance."
         )
 
+    # Refresh connected connectors (Gmail, Calendar, Apple Notes, …) in the
+    # background so the assistant has fresh data on every launch. Runs in a
+    # daemon thread to avoid blocking server boot; failures are self-contained.
+    if getattr(config.server, "sync_on_startup", True):
+        import threading
+
+        def _startup_sync() -> None:
+            try:
+                from openjarvis.connectors.startup_sync import (
+                    sync_connected_connectors,
+                )
+
+                sync_connected_connectors()
+            except Exception as exc:  # never let a sync error crash the server
+                logger.warning("Startup connector sync failed: %s", exc)
+
+        threading.Thread(
+            target=_startup_sync, name="startup-connector-sync", daemon=True
+        ).start()
+
     import uvicorn
 
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")

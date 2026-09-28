@@ -849,6 +849,10 @@ class ServerConfig:
     agent: str = "orchestrator"
     model: str = ""
     workers: int = 1
+    # Refresh all connected connectors (Gmail, Calendar, Apple Notes, …) once
+    # when the server boots. The desktop app spawns a fresh server on every
+    # launch, so this keeps the assistant's data current on each start.
+    sync_on_startup: bool = True
     cors_origins: list = field(
         default_factory=lambda: [
             "http://localhost:3000",
