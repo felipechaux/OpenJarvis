@@ -306,18 +306,16 @@ class TestAntigravitySessions:
         assert res.success
         typed.assert_called_once_with("jarvis-openjarvis-agy", "revisa el README")
 
-    def test_antigravity_approvals_go_to_terminal(self) -> None:
-        with (
-            patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
-            patch.object(sc, "list_sessions", return_value=self.LIVE),
-            patch.object(sc, "press_keys") as pressed,
-        ):
-            res = sc.SendToSessionTool().execute(
-                project="openjarvis", cli="antigravity", keys="approve"
-            )
-            assert not res.success and "terminal" in res.content
-            pressed.assert_not_called()
-        # interrupt is allowed for Antigravity
+    @pytest.mark.parametrize(
+        "keys,pressed_keys",
+        [
+            ("approve", ["1"]),
+            ("approve_always", ["2"]),  # conversation scope, never "3" (persist)
+            ("deny", ["Escape"]),
+            ("interrupt", ["Escape"]),
+        ],
+    )
+    def test_antigravity_permission_keys(self, keys, pressed_keys) -> None:
         with (
             patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
             patch.object(sc, "list_sessions", return_value=self.LIVE),
@@ -325,12 +323,11 @@ class TestAntigravitySessions:
             patch.object(sc, "capture_screen", return_value=""),
             patch.object(sc.time, "sleep"),
         ):
-            assert (
-                sc.SendToSessionTool()
-                .execute(project="openjarvis", cli="antigravity", keys="interrupt")
-                .success
+            res = sc.SendToSessionTool().execute(
+                project="openjarvis", cli="antigravity", keys=keys
             )
-        pressed.assert_called_once_with("jarvis-openjarvis-agy", ["Escape"])
+        assert res.success
+        pressed.assert_called_once_with("jarvis-openjarvis-agy", pressed_keys)
 
     def test_coding_sessions_reports_agy_screen(self) -> None:
         from openjarvis.tools import coding_sessions as cs
