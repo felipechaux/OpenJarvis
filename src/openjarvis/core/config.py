@@ -421,6 +421,9 @@ class EngineConfig:
     apple_fm: AppleFmEngineConfig = field(default_factory=AppleFmEngineConfig)
     gemma_cpp: GemmaCppEngineConfig = field(default_factory=GemmaCppEngineConfig)
     lemonade: LemonadeEngineConfig = field(default_factory=LemonadeEngineConfig)
+    # How the gemini_cli engine authenticates: "subscription" (the CLI's own
+    # Google login, like claude_cli) or "api_key" (GEMINI_API_KEY).
+    gemini_cli_auth: str = "subscription"
 
     # Backward-compat properties for old flat attribute names
     @property
@@ -802,6 +805,20 @@ class BrowserConfig:
     viewport_height: int = 720
 
 
+@dataclass
+class LauncherConfig:
+    """Launcher tools: ``open_app``, ``start_coding_session``, ``coding_sessions``."""
+
+    # Folders scanned for projects; a project must live under one of them.
+    project_roots: List[str] = field(default_factory=lambda: ["~/Developer"])
+    # How deep to look for projects below each root.
+    max_depth: int = 3
+    # Spoken name → installed app name, e.g. {"antigravity": "Antigravity IDE"}.
+    app_aliases: Dict[str, str] = field(default_factory=dict)
+    # Terminal app ``start_coding_session`` opens (Terminal.app is scriptable).
+    terminal: str = "Terminal"
+
+
 @dataclass(slots=True)
 class ToolsConfig:
     """Tools primitive settings — wraps storage and MCP configuration."""
@@ -809,6 +826,7 @@ class ToolsConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     browser: BrowserConfig = field(default_factory=BrowserConfig)
+    launcher: LauncherConfig = field(default_factory=LauncherConfig)
     enabled: str = ""  # comma-separated default tools
 
 
