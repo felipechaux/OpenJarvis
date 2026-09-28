@@ -807,7 +807,8 @@ class BrowserConfig:
 
 @dataclass
 class LauncherConfig:
-    """Launcher tools: ``open_app``, ``start_coding_session``, ``coding_sessions``."""
+    """Launcher tools: ``open_app``, ``start_coding_session``, ``coding_sessions``,
+    ``open_url``, ``spotify``."""
 
     # Folders scanned for projects; a project must live under one of them.
     project_roots: List[str] = field(default_factory=lambda: ["~/Developer"])
@@ -820,6 +821,8 @@ class LauncherConfig:
     # Spoken progress while a JARVIS-started Claude session works: at most one
     # summary every this many seconds (0 = only "finished" / "needs permission").
     progress_interval_s: float = 60.0
+    # Browser ``open_url`` / ``spotify`` use ("Arc", "Safari"…); "" = system default.
+    browser: str = ""
 
 
 @dataclass
