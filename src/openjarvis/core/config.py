@@ -1242,6 +1242,12 @@ class SpeechConfig:
     language: str = ""  # Empty = auto-detect (good for bilingual ES/EN)
     device: str = "auto"  # "auto", "cpu", "cuda"
     compute_type: str = "float16"  # "float16", "int8", "float32"
+    # Text-to-speech (edge-tts) voice + prosody used by /v1/speech/synthesize
+    # when the caller doesn't specify them.  Empty = backend defaults
+    # (calm J.A.R.V.I.S. delivery: rate "-6%", pitch "-8Hz").
+    tts_voice_id: str = ""
+    tts_rate: str = ""  # edge-tts rate, e.g. "-6%"
+    tts_pitch: str = ""  # edge-tts pitch, e.g. "-8Hz"
 
 
 @dataclass(slots=True)
@@ -1349,6 +1355,10 @@ class DigestConfig:
     honorific: str = "sir"
     voice_id: str = ""
     voice_speed: float = 1.0
+    # edge-tts prosody for the digest audio.  Empty = inherit [speech]
+    # tts_rate / tts_pitch so the digest sounds like the chat voice.
+    voice_rate: str = ""
+    voice_pitch: str = ""
     tts_backend: str = "cartesia"
     messages: DigestSectionConfig = field(
         default_factory=lambda: DigestSectionConfig(

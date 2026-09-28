@@ -80,6 +80,9 @@ interface Settings {
   maxTokens: number;
   speechEnabled: boolean;
   ttsEnabled: boolean;
+  /** Subtle J.A.R.V.I.S.-style polish on spoken replies (EQ, light
+   *  compression, faint holographic reverb) applied in useTTS. */
+  voiceFx: boolean;
   language: AssistantLanguage;
 }
 
@@ -94,6 +97,7 @@ function loadSettings(): Settings {
     maxTokens: 4096,
     speechEnabled: true,
     ttsEnabled: true,
+    voiceFx: true,
     language: 'es',
   };
   try {

@@ -116,8 +116,9 @@ def test_openai_tts_synthesize():
 
 
 def test_edge_tts_registered():
-    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend  # noqa: F401
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
 
+    TTSRegistry.register_value("edge_tts", EdgeTTSBackend)
     assert TTSRegistry.contains("edge_tts")
 
 
@@ -142,8 +143,8 @@ def test_edge_tts_synthesize_autoswitch():
         mock_comm.assert_called_with(
             "Hello sir, how are you?",
             voice="en-GB-RyanNeural",
-            rate="+8%",
-            pitch="-5Hz",
+            rate="-6%",
+            pitch="-8Hz",
         )
 
         # 2. Spanish text + English male voice -> switches to Spain Spanish
@@ -153,8 +154,8 @@ def test_edge_tts_synthesize_autoswitch():
         mock_comm.assert_called_with(
             "He consultado su correo, señor.",
             voice="es-ES-AlvaroNeural",
-            rate="+8%",
-            pitch="-5Hz",
+            rate="-6%",
+            pitch="-8Hz",
         )
 
         # 3. Spanish text + English female voice -> switches to Spain Spanish
@@ -162,8 +163,104 @@ def test_edge_tts_synthesize_autoswitch():
         mock_comm.assert_called_with(
             "Buenos días sir.",
             voice="es-ES-ElviraNeural",
-            rate="+8%",
-            pitch="-5Hz",
+            rate="-6%",
+            pitch="-8Hz",
         )
 
 
+
+
+def test_edge_tts_default_prosody_is_calm_jarvis():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+    backend = EdgeTTSBackend()
+    # Measured butler delivery: slower and lower than the stock voice.
+    assert backend.default_rate == "-6%"
+    assert backend.default_pitch == "-8Hz"
+    assert backend.default_voice == "en-GB-RyanNeural"
+
+
+def test_edge_tts_instance_prosody_and_voice_from_config():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+    backend = EdgeTTSBackend(
+        voice_id="es-ES-AlvaroNeural", rate="-10%", pitch="-12Hz"
+    )
+    with patch("edge_tts.Communicate") as mock_comm:
+        result = backend.synthesize("Buenas noches, señor.")
+    mock_comm.assert_called_with(
+        "Buenas noches, señor.",
+        voice="es-ES-AlvaroNeural",
+        rate="-10%",
+        pitch="-12Hz",
+    )
+    assert result.metadata["rate"] == "-10%"
+    assert result.metadata["pitch"] == "-12Hz"
+
+
+def test_edge_tts_per_call_prosody_override():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+    backend = EdgeTTSBackend()
+    with patch("edge_tts.Communicate") as mock_comm:
+        backend.synthesize(
+            "Todos los sistemas operativos.",
+            voice_id="es-ES-AlvaroNeural",
+            rate="+4%",
+            pitch="-2Hz",
+        )
+    mock_comm.assert_called_with(
+        "Todos los sistemas operativos.",
+        voice="es-ES-AlvaroNeural",
+        rate="+4%",
+        pitch="-2Hz",
+    )
+
+
+def test_edge_tts_speed_folds_into_rate():
+    from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
+
+    backend = EdgeTTSBackend()
+    with patch("edge_tts.Communicate") as mock_comm:
+        backend.synthesize("Hola.", voice_id="es-ES-AlvaroNeural", speed=1.1)
+    # -6% default + 10% speed-up
+    assert mock_comm.call_args.kwargs["rate"] == "+4%"
+
+
+def test_edge_tts_invalid_prosody_falls_back():
+    from openjarvis.speech.edge_tts_backend import (
+        _RATE_RE,
+        EdgeTTSBackend,
+        _normalize_prosody,
+    )
+
+    backend = EdgeTTSBackend(rate="fast", pitch="deep")
+    assert backend.default_rate == "-6%"
+    assert backend.default_pitch == "-8Hz"
+
+    assert _normalize_prosody("5%", _RATE_RE, "-6%") == "+5%"
+    assert _normalize_prosody("", _RATE_RE, "-6%") == "-6%"
+    assert _normalize_prosody(None, _RATE_RE, "-6%") == "-6%"
+
+    with patch("edge_tts.Communicate") as mock_comm:
+        backend.synthesize(
+            "Hola.", voice_id="es-ES-AlvaroNeural", rate="nope", pitch="1000Hz!"
+        )
+    assert mock_comm.call_args.kwargs["rate"] == "-6%"
+    assert mock_comm.call_args.kwargs["pitch"] == "-8Hz"
+
+
+def test_speech_package_registers_edge_tts(monkeypatch):
+    """The text_to_speech tool (digest audio) resolves backends via the
+    registry after ``import openjarvis.speech`` — edge_tts must be there."""
+    import importlib
+    import sys
+
+    import openjarvis.speech
+
+    # Force a fresh import of the submodule so its @register runs against
+    # the (per-test cleared) registry; monkeypatch restores the original.
+    monkeypatch.delitem(sys.modules, "openjarvis.speech.edge_tts_backend")
+    importlib.reload(openjarvis.speech)
+
+    assert TTSRegistry.contains("edge_tts")

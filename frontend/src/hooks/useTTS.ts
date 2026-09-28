@@ -69,6 +69,123 @@ function cleanForSpeech(text: string): string {
     .trim();
 }
 
+// ── J.A.R.V.I.S. voice polish ────────────────────────────────────────
+// A subtle "holographic" finish on top of the neural voice.  Everything is
+// deliberately gentle — the goal is a polished, slightly larger-than-life
+// butler, never a robot:
+//
+//   input ─ highpass 80Hz ─ warmth +1.5dB@200 ─ mud −2dB@380 ─ presence +2dB@3k
+//         ─ air +2.5dB shelf@9k ─ compressor (2.5:1, soft knee) ─┬─ dry ───────────┐
+//                                                               ├─ room reverb ───┤ (≈11%)
+//                                                               └─ shimmer comb ──┤ (≈5%)
+//                                                                                 └─ limiter ─ output
+//
+// The room reverb is a short (~0.55s), decorrelated-stereo synthetic IR,
+// highpassed so the tail never muddies consonants.  The shimmer is a tiny
+// 7ms comb on the upper band only — the faint metallic sheen of JARVIS.
+// The graph is built once per AudioContext and reused across sentences so
+// reverb tails flow naturally between them.
+interface VoiceFxChain {
+  ctx: AudioContext;
+  input: AudioNode;
+  output: AudioNode;
+}
+
+function makeRoomImpulse(ctx: AudioContext, seconds = 0.55, decay = 5.5): AudioBuffer {
+  const length = Math.floor(ctx.sampleRate * seconds);
+  const ir = ctx.createBuffer(2, length, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const data = ir.getChannelData(ch);
+    for (let i = 0; i < length; i++) {
+      const t = i / length;
+      // Independent noise per channel → natural stereo width.
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, decay);
+    }
+  }
+  return ir;
+}
+
+function buildVoiceFx(ctx: AudioContext): VoiceFxChain {
+  const peq = (type: BiquadFilterType, freq: number, gain = 0, q = 0.9) => {
+    const f = ctx.createBiquadFilter();
+    f.type = type;
+    f.frequency.value = freq;
+    f.gain.value = gain;
+    f.Q.value = q;
+    return f;
+  };
+
+  // Tone shaping
+  const highpass = peq('highpass', 80, 0, 0.707);
+  const warmth = peq('peaking', 200, 1.5, 0.9);
+  const mud = peq('peaking', 380, -2, 1.1);
+  const presence = peq('peaking', 3000, 2, 1.0);
+  const air = peq('highshelf', 9000, 2.5);
+
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -20;
+  comp.knee.value = 12;
+  comp.ratio.value = 2.5;
+  comp.attack.value = 0.005;
+  comp.release.value = 0.18;
+
+  highpass.connect(warmth);
+  warmth.connect(mud);
+  mud.connect(presence);
+  presence.connect(air);
+  air.connect(comp);
+
+  const sum = ctx.createGain();
+  sum.gain.value = 1;
+
+  // Dry path (with a little make-up gain after compression)
+  const dry = ctx.createGain();
+  dry.gain.value = 1.08;
+  comp.connect(dry);
+  dry.connect(sum);
+
+  // Short "holographic room" reverb, low mix
+  const reverbHp = peq('highpass', 450, 0, 0.707);
+  const reverb = ctx.createConvolver();
+  reverb.buffer = makeRoomImpulse(ctx);
+  const reverbMix = ctx.createGain();
+  reverbMix.gain.value = 0.11;
+  comp.connect(reverbHp);
+  reverbHp.connect(reverb);
+  reverb.connect(reverbMix);
+  reverbMix.connect(sum);
+
+  // Upper-band shimmer comb (7ms, light feedback), panned slightly right
+  // so it reads as width rather than as an echo.
+  const shimmerBand = peq('highpass', 2500, 0, 0.707);
+  const shimmerDelay = ctx.createDelay(0.05);
+  shimmerDelay.delayTime.value = 0.007;
+  const shimmerFb = ctx.createGain();
+  shimmerFb.gain.value = 0.25;
+  const shimmerMix = ctx.createGain();
+  shimmerMix.gain.value = 0.05;
+  const shimmerPan = ctx.createStereoPanner();
+  shimmerPan.pan.value = 0.35;
+  comp.connect(shimmerBand);
+  shimmerBand.connect(shimmerDelay);
+  shimmerDelay.connect(shimmerFb);
+  shimmerFb.connect(shimmerDelay);
+  shimmerDelay.connect(shimmerMix);
+  shimmerMix.connect(shimmerPan);
+  shimmerPan.connect(sum);
+
+  // Safety limiter so the boosts never clip.
+  const limiter = ctx.createDynamicsCompressor();
+  limiter.threshold.value = -2;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.002;
+  limiter.release.value = 0.1;
+  sum.connect(limiter);
+
+  return { ctx, input: highpass, output: limiter };
+}
+
 export function useTTS() {
   const [speaking, setSpeaking] = useState(false);
   const [audioData, setAudioData] = useState<AudioAnalyzerData>({
@@ -82,6 +199,11 @@ export function useTTS() {
   const analyzerRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const dataArrayRef = useRef<Uint8Array | null>(null);
+  // Persistent per-AudioContext output stage: [voice FX] → analyser → speakers.
+  // The analyser sits AFTER the FX so the reactor animation reacts to exactly
+  // what the user hears.
+  const outAnalyserRef = useRef<AnalyserNode | null>(null);
+  const fxRef = useRef<VoiceFxChain | null>(null);
 
   const queueRef = useRef<string[]>([]);
   const drainingRef = useRef(false);
@@ -166,14 +288,30 @@ export function useTTS() {
     const source = ctx.createBufferSource();
     source.buffer = audioBuf;
 
-    const analyzer = ctx.createAnalyser();
-    analyzer.fftSize = 64;
-    analyzer.smoothingTimeConstant = 0.8;
+    // (Re)build the output stage when the context changed.
+    if (!outAnalyserRef.current || outAnalyserRef.current.context !== ctx) {
+      const out = ctx.createAnalyser();
+      out.fftSize = 64;
+      out.smoothingTimeConstant = 0.8;
+      out.connect(ctx.destination);
+      outAnalyserRef.current = out;
+      fxRef.current = null;
+    }
+    const analyzer = outAnalyserRef.current;
     analyzerRef.current = analyzer;
     dataArrayRef.current = new Uint8Array(analyzer.frequencyBinCount);
 
-    source.connect(analyzer);
-    analyzer.connect(ctx.destination);
+    // Voice FX is read per sentence so toggling it in Settings applies to
+    // the very next sentence without reloading.
+    if (useAppStore.getState().settings.voiceFx) {
+      if (!fxRef.current || fxRef.current.ctx !== ctx) {
+        fxRef.current = buildVoiceFx(ctx);
+        fxRef.current.output.connect(analyzer);
+      }
+      source.connect(fxRef.current.input);
+    } else {
+      source.connect(analyzer);
+    }
     sourceRef.current = source;
 
     return new Promise<void>((resolve) => {

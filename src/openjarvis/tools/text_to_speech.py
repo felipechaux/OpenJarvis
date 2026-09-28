@@ -41,6 +41,19 @@ class TextToSpeechTool(BaseTool):
                         "type": "string",
                         "description": "TTS backend (cartesia, kokoro, openai_tts).",
                     },
+                    "rate": {
+                        "type": "string",
+                        "description": (
+                            "Optional speaking-rate offset (edge_tts only), "
+                            "e.g. '-6%'."
+                        ),
+                    },
+                    "pitch": {
+                        "type": "string",
+                        "description": (
+                            "Optional pitch offset (edge_tts only), e.g. '-8Hz'."
+                        ),
+                    },
                     "output_dir": {
                         "type": "string",
                         "description": "Directory to save the audio file.",
@@ -61,6 +74,8 @@ class TextToSpeechTool(BaseTool):
         backend_key = params.get("backend", "cartesia")
         output_dir = params.get("output_dir", "")
         speed = float(params.get("speed", 1.0))
+        rate = str(params.get("rate") or "").strip()
+        pitch = str(params.get("pitch") or "").strip()
 
         if not text:
             return ToolResult(
@@ -79,7 +94,15 @@ class TextToSpeechTool(BaseTool):
         backend_cls = TTSRegistry.get(backend_key)
         backend = backend_cls()
 
-        result = backend.synthesize(text, voice_id=voice_id, speed=speed)
+        # Prosody is an edge-tts feature; other backends don't accept it.
+        prosody: dict[str, str] = {}
+        if backend_key == "edge_tts":
+            if rate:
+                prosody["rate"] = rate
+            if pitch:
+                prosody["pitch"] = pitch
+
+        result = backend.synthesize(text, voice_id=voice_id, speed=speed, **prosody)
 
         # Save to file
         if output_dir:

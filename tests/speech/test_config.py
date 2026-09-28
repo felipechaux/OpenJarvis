@@ -24,3 +24,17 @@ def test_jarvis_system_has_speech_backend():
     from openjarvis.system import JarvisSystem
 
     assert "speech_backend" in JarvisSystem.__dataclass_fields__
+
+
+def test_speech_config_tts_prosody_defaults_empty():
+    """Empty TTS voice/prosody → backend JARVIS defaults apply."""
+    from openjarvis.core.config import DigestConfig, SpeechConfig
+
+    cfg = SpeechConfig()
+    assert cfg.tts_voice_id == ""
+    assert cfg.tts_rate == ""
+    assert cfg.tts_pitch == ""
+
+    dc = DigestConfig()
+    assert dc.voice_rate == ""
+    assert dc.voice_pitch == ""

@@ -386,10 +386,17 @@ def serve(
     try:
         from openjarvis.speech.edge_tts_backend import EdgeTTSBackend
 
-        _edge = EdgeTTSBackend()
+        _edge = EdgeTTSBackend(
+            voice_id=config.speech.tts_voice_id,
+            rate=config.speech.tts_rate,
+            pitch=config.speech.tts_pitch,
+        )
         if _edge.health():
             tts_backend = _edge
-            console.print("  TTS:    [cyan]edge-tts / en-GB-RyanNeural (JARVIS voice)[/cyan]")
+            console.print(
+                f"  TTS:    [cyan]edge-tts / {_edge.default_voice} "
+                f"(rate {_edge.default_rate}, pitch {_edge.default_pitch})[/cyan]"
+            )
     except Exception as exc:
         logger.debug("EdgeTTS unavailable: %s", exc)
 

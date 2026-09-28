@@ -69,3 +69,47 @@ def test_load_persona():
     # Nonexistent persona returns empty string
     result = _load_persona("nonexistent_persona_xyz")
     assert result == ""
+
+
+def test_morning_digest_passes_voice_and_prosody_to_tts(tmp_path):
+    import json
+
+    from openjarvis.agents.morning_digest import MorningDigestAgent
+
+    mock_engine = MagicMock()
+    mock_engine.generate.return_value = {
+        "content": "Buenos días, señor. Tiene dos reuniones hoy.",
+        "finish_reason": "stop",
+        "usage": {},
+    }
+    collect = ToolResult(tool_name="digest_collect", content="x", success=True)
+    tts = ToolResult(
+        tool_name="text_to_speech",
+        content=str(tmp_path / "digest.mp3"),
+        success=True,
+        metadata={"audio_path": str(tmp_path / "digest.mp3")},
+    )
+
+    agent = MorningDigestAgent(
+        mock_engine,
+        "test-model",
+        tools=[],
+        persona="neutral",
+        voice_id="es-ES-AlvaroNeural",
+        tts_backend="edge_tts",
+        voice_rate="-6%",
+        voice_pitch="-8Hz",
+        digest_store_path=str(tmp_path / "digest.db"),
+    )
+
+    with patch.object(
+        agent._executor, "execute", side_effect=[collect, tts]
+    ) as mock_exec:
+        agent.run("Generate morning digest")
+
+    tts_call = mock_exec.call_args_list[1].args[0]
+    args = json.loads(tts_call.arguments)
+    assert args["voice_id"] == "es-ES-AlvaroNeural"
+    assert args["backend"] == "edge_tts"
+    assert args["rate"] == "-6%"
+    assert args["pitch"] == "-8Hz"

@@ -238,6 +238,10 @@ class QueryOrchestrator:
                     "timezone": dc.timezone,
                     "voice_id": dc.voice_id,
                     "voice_speed": dc.voice_speed,
+                    # Digest audio inherits the chat voice's prosody unless
+                    # [digest] overrides it, so both sound the same.
+                    "voice_rate": dc.voice_rate or s.config.speech.tts_rate,
+                    "voice_pitch": dc.voice_pitch or s.config.speech.tts_pitch,
                     "tts_backend": dc.tts_backend,
                     "honorific": dc.honorific,
                 }

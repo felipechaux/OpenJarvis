@@ -84,3 +84,86 @@ def test_health_no_backend():
     assert response.status_code == 200
     data = response.json()
     assert data["available"] is False
+
+
+# ---------------------------------------------------------------------------
+# /v1/speech/synthesize
+# ---------------------------------------------------------------------------
+
+
+def _synth_client(backend_id: str = "edge_tts", default_voice: str = ""):
+    from fastapi import FastAPI
+
+    from openjarvis.server.api_routes import speech_router
+    from openjarvis.speech.tts import TTSResult
+
+    tts = MagicMock()
+    tts.backend_id = backend_id
+    tts.default_voice = default_voice
+    tts.synthesize.return_value = TTSResult(audio=b"mp3-bytes", format="mp3")
+
+    app = FastAPI()
+    app.state.tts_backend = tts
+    app.include_router(speech_router)
+    return TestClient(app), tts
+
+
+def test_synthesize_backward_compatible_text_and_voice_only():
+    client, tts = _synth_client()
+    response = client.post(
+        "/v1/speech/synthesize",
+        json={"text": "Buenas noches, señor.", "voice_id": "es-ES-AlvaroNeural"},
+    )
+    assert response.status_code == 200
+    assert response.content == b"mp3-bytes"
+    assert response.headers["content-type"] == "audio/mpeg"
+    # No prosody kwargs → backend applies its configured JARVIS defaults.
+    tts.synthesize.assert_called_once_with(
+        "Buenas noches, señor.",
+        voice_id="es-ES-AlvaroNeural",
+        speed=1.0,
+        output_format="mp3",
+    )
+
+
+def test_synthesize_passes_optional_prosody():
+    client, tts = _synth_client()
+    response = client.post(
+        "/v1/speech/synthesize",
+        json={
+            "text": "Sistemas operativos.",
+            "voice_id": "es-ES-AlvaroNeural",
+            "rate": "-10%",
+            "pitch": "-12Hz",
+        },
+    )
+    assert response.status_code == 200
+    kwargs = tts.synthesize.call_args.kwargs
+    assert kwargs["rate"] == "-10%"
+    assert kwargs["pitch"] == "-12Hz"
+
+
+def test_synthesize_uses_backend_default_voice():
+    client, tts = _synth_client(default_voice="es-ES-AlvaroNeural")
+    response = client.post("/v1/speech/synthesize", json={"text": "Hola."})
+    assert response.status_code == 200
+    assert tts.synthesize.call_args.kwargs["voice_id"] == "es-ES-AlvaroNeural"
+
+
+def test_synthesize_ignores_prosody_for_non_edge_backend():
+    client, tts = _synth_client(backend_id="kokoro")
+    response = client.post(
+        "/v1/speech/synthesize",
+        json={"text": "Hello.", "rate": "-10%", "pitch": "-12Hz"},
+    )
+    assert response.status_code == 200
+    kwargs = tts.synthesize.call_args.kwargs
+    assert "rate" not in kwargs and "pitch" not in kwargs
+    assert kwargs["voice_id"] == "af_heart"
+    assert kwargs["output_format"] == "wav"
+
+
+def test_synthesize_missing_text():
+    client, _ = _synth_client()
+    response = client.post("/v1/speech/synthesize", json={"text": "  "})
+    assert response.status_code == 400

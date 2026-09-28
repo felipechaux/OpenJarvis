@@ -59,6 +59,8 @@ class MorningDigestAgent(ToolUsingAgent):
         self._timezone = kwargs.pop("timezone", "America/Los_Angeles")
         self._voice_id = kwargs.pop("voice_id", "")
         self._voice_speed = kwargs.pop("voice_speed", 1.0)
+        self._voice_rate = kwargs.pop("voice_rate", "")
+        self._voice_pitch = kwargs.pop("voice_pitch", "")
         self._tts_backend = kwargs.pop("tts_backend", "cartesia")
         self._digest_store_path = kwargs.pop("digest_store_path", "")
         self._honorific = kwargs.pop("honorific", "sir")
@@ -235,6 +237,8 @@ class MorningDigestAgent(ToolUsingAgent):
                     "voice_id": self._voice_id,
                     "backend": self._tts_backend,
                     "speed": self._voice_speed,
+                    "rate": self._voice_rate,
+                    "pitch": self._voice_pitch,
                 }
             ),
         )

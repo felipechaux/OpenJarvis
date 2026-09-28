@@ -795,10 +795,23 @@ async def synthesize_speech(request: Request):
 
     body = await request.json()
     text: str = body.get("text", "").strip()
-    # Default to JARVIS British voice; fall back to kokoro default if not edge-tts
-    default_voice = "en-GB-RyanNeural" if tts.backend_id == "edge_tts" else "af_heart"
-    voice_id: str = body.get("voice_id", default_voice)
+    # Default to the backend's configured voice (edge-tts: [speech]
+    # tts_voice_id, else the JARVIS British voice); kokoro default otherwise.
+    if tts.backend_id == "edge_tts":
+        default_voice = getattr(tts, "default_voice", "") or "en-GB-RyanNeural"
+    else:
+        default_voice = "af_heart"
+    voice_id: str = body.get("voice_id") or default_voice
     speed: float = float(body.get("speed", 1.0))
+    # Optional edge-tts prosody overrides ("-6%", "-8Hz").  When omitted the
+    # backend applies its configured JARVIS defaults, so older callers that
+    # send only text/voice_id keep working unchanged.
+    prosody: dict = {}
+    if tts.backend_id == "edge_tts":
+        for key in ("rate", "pitch"):
+            val = body.get(key)
+            if isinstance(val, str) and val.strip():
+                prosody[key] = val.strip()
 
     if not text:
         raise HTTPException(status_code=400, detail="Missing 'text' field")
@@ -808,7 +821,10 @@ async def synthesize_speech(request: Request):
     # edge-tts outputs MP3; kokoro outputs WAV
     fmt = "mp3" if tts.backend_id == "edge_tts" else "wav"
     result = await loop.run_in_executor(
-        None, lambda: tts.synthesize(text, voice_id=voice_id, speed=speed, output_format=fmt)
+        None,
+        lambda: tts.synthesize(
+            text, voice_id=voice_id, speed=speed, output_format=fmt, **prosody
+        ),
     )
     media_type = "audio/mpeg" if fmt == "mp3" else "audio/wav"
     return Response(content=result.audio, media_type=media_type)

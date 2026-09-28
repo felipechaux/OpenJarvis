@@ -51,3 +51,51 @@ def test_tts_tool_empty_text():
     tool = TextToSpeechTool()
     result = tool.execute(text="")
     assert result.success is False
+
+
+def _run_tool_with_mock_backend(tmp_path, **params):
+    from openjarvis.tools.text_to_speech import TextToSpeechTool
+
+    mock_result = TTSResult(audio=b"a", format="mp3")
+    with patch("openjarvis.tools.text_to_speech.TTSRegistry") as mock_registry:
+        mock_backend_cls = MagicMock()
+        mock_backend_cls.return_value.synthesize.return_value = mock_result
+        mock_registry.contains.return_value = True
+        mock_registry.get.return_value = mock_backend_cls
+        result = TextToSpeechTool().execute(output_dir=str(tmp_path), **params)
+    return result, mock_backend_cls.return_value.synthesize
+
+
+def test_tts_tool_passes_prosody_to_edge_tts(tmp_path):
+    result, synth = _run_tool_with_mock_backend(
+        tmp_path,
+        text="Buenos días, señor.",
+        voice_id="es-ES-AlvaroNeural",
+        backend="edge_tts",
+        rate="-6%",
+        pitch="-8Hz",
+    )
+    assert result.success is True
+    synth.assert_called_once_with(
+        "Buenos días, señor.",
+        voice_id="es-ES-AlvaroNeural",
+        speed=1.0,
+        rate="-6%",
+        pitch="-8Hz",
+    )
+
+
+def test_tts_tool_omits_empty_or_unsupported_prosody(tmp_path):
+    # Empty prosody → backend defaults (no kwargs).
+    _, synth = _run_tool_with_mock_backend(
+        tmp_path, text="Hola.", backend="edge_tts", rate="", pitch=""
+    )
+    assert "rate" not in synth.call_args.kwargs
+    assert "pitch" not in synth.call_args.kwargs
+
+    # Non-edge backends never receive prosody kwargs.
+    _, synth = _run_tool_with_mock_backend(
+        tmp_path, text="Hello.", backend="cartesia", rate="-6%", pitch="-8Hz"
+    )
+    assert "rate" not in synth.call_args.kwargs
+    assert "pitch" not in synth.call_args.kwargs
