@@ -28,6 +28,8 @@ _HOST_MAP: Dict[str, str | None] = {
     "litellm": None,
     "gemma_cpp": None,
     "claude_cli": None,
+    "gemini_cli": None,
+    "antigravity_cli": None,
 }
 
 
