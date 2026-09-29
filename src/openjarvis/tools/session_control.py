@@ -40,6 +40,7 @@ PREFIX = "jarvis-"
 AGY_SUFFIX = "-agy"
 _MAX_MESSAGE = 4000
 _HOOKS_FILE = Path.home() / ".openjarvis" / "claude-session-hooks.json"
+_ANTIGRAVITY_GLOBAL_HOOKS_FILE = Path.home() / ".gemini" / "config" / "hooks.json"
 _EVENTS_URL = "http://127.0.0.1:8000/v1/coding-sessions/events"
 
 # Keys for answering an assistant's prompt, per CLI.  Both permission
@@ -248,6 +249,69 @@ def hooks_settings_file() -> Path:
     if not _HOOKS_FILE.exists() or _HOOKS_FILE.read_text() != text:
         _HOOKS_FILE.write_text(text)
     return _HOOKS_FILE
+
+
+def antigravity_hooks_file(project: Optional[Path] = None) -> Path:
+    """Ensure Stop and PostToolUse lifecycle hooks are configured for Antigravity (agy).
+
+    Writes hooks to ~/.gemini/config/hooks.json so agy forwards tool
+    execution and session termination to the JARVIS server. If project
+    is provided, also configures <project>/.agents/hooks.json.
+    """
+    post = (
+        "curl -s -m 3 -X POST -H 'Content-Type: application/json' "
+        f"--data-binary @- {_EVENTS_URL} >/dev/null 2>&1 || true; echo '{{}}'"
+    )
+    stop_cfg = [
+        {
+            "type": "command",
+            "command": post,
+        }
+    ]
+    post_tool_cfg = [
+        {
+            "matcher": "*",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": post,
+                }
+            ],
+        }
+    ]
+    try:
+        _ANTIGRAVITY_GLOBAL_HOOKS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        existing: Dict[str, Any] = {}
+        if _ANTIGRAVITY_GLOBAL_HOOKS_FILE.exists():
+            try:
+                existing = json.loads(_ANTIGRAVITY_GLOBAL_HOOKS_FILE.read_text())
+            except Exception:
+                existing = {}
+        target = existing.setdefault("openjarvis", {})
+        target["Stop"] = stop_cfg
+        target["PostToolUse"] = post_tool_cfg
+        _ANTIGRAVITY_GLOBAL_HOOKS_FILE.write_text(json.dumps(existing, indent=2))
+    except OSError:
+        pass
+
+    if project:
+        proj_file = project / ".agents" / "hooks.json"
+        try:
+            proj_file.parent.mkdir(parents=True, exist_ok=True)
+            proj_existing: Dict[str, Any] = {}
+            if proj_file.exists():
+                try:
+                    proj_existing = json.loads(proj_file.read_text())
+                except Exception:
+                    proj_existing = {}
+            target_proj = proj_existing.setdefault("openjarvis", {})
+            target_proj["Stop"] = stop_cfg
+            target_proj["PostToolUse"] = post_tool_cfg
+            proj_file.write_text(json.dumps(proj_existing, indent=2))
+        except OSError:
+            pass
+
+    return _ANTIGRAVITY_GLOBAL_HOOKS_FILE
 
 
 # ── Tool ────────────────────────────────────────────────────────────────

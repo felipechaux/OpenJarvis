@@ -298,6 +298,78 @@ class TestProgress:
         assert watcher.read_new_actions(st, path) == []
         assert st["partial"] == ""
 
+    def test_summary_antigravity_tools(self) -> None:
+        actions = [
+            watcher.describe_action("view_file", {"AbsolutePath": "/a/x.py"}),
+            watcher.describe_action(
+                "replace_file_content", {"TargetFile": "/a/launcher.py"}
+            ),
+            watcher.describe_action(
+                "run_command", {"toolSummary": "Run pytest", "CommandLine": "pytest"}
+            ),
+            watcher.describe_action(
+                "invoke_subagent", {"Role": "Codebase Researcher"}
+            ),
+        ]
+        assert watcher.summarize_actions(actions) == (
+            "editó launcher.py, ejecutó Run pytest, "
+            "lanzó subagentes (Codebase Researcher) y 1 más"
+        )
+
+    def test_read_new_actions_antigravity(self, tmp_path: Path) -> None:
+        path = tmp_path / "transcript.jsonl"
+        old = {
+            "type": "PLANNER_RESPONSE",
+            "tool_calls": [
+                {
+                    "name": "view_file",
+                    "args": {"AbsolutePath": "/old.py"},
+                }
+            ],
+        }
+        path.write_text(json.dumps(old) + "\n")
+        st: dict = {}
+        assert watcher.read_new_actions(st, path) == []
+        new = {
+            "type": "PLANNER_RESPONSE",
+            "tool_calls": [
+                {
+                    "name": "run_command",
+                    "args": {"CommandLine": "pytest -q"},
+                }
+            ],
+        }
+        with path.open("a") as fh:
+            fh.write(json.dumps(new) + "\n")
+        assert watcher.read_new_actions(st, path) == [("run", "pytest -q")]
+
+    def test_antigravity_step_progress_text(self) -> None:
+        edit = [("edit", "main.py")]
+        t0 = 1000.0
+        screen = "Thinking... Esc to cancel"
+        assert (
+            watcher.step(
+                "s-agy", "openjarvis", screen, edit, t0, 60, cli="antigravity"
+            )
+            is None
+        )
+        res = watcher.step(
+            "s-agy",
+            "openjarvis",
+            screen,
+            [("run", "pytest")],
+            t0 + 25,
+            60,
+            cli="antigravity",
+        )
+        assert res is not None
+        assert (
+            res["text"]
+            == "Antigravity sigue en openjarvis: editó main.py y ejecutó pytest."
+        )
+        assert res["cli"] == "antigravity"
+        assert res["cli_label"] == "Antigravity"
+
     def test_hooks_only_stop_and_notification(self, tmp_path: Path) -> None:
         with patch.object(sc, "_HOOKS_FILE", tmp_path / "hooks.json"):
             data = json.loads(sc.hooks_settings_file().read_text())
@@ -310,6 +382,22 @@ class TestAntigravitySessions:
         ("jarvis-openjarvis-agy", "/p"),
         ("jarvis-dadomatch-agy", "/q"),
     ]
+
+    def test_antigravity_hooks_file(self, tmp_path: Path) -> None:
+        g = tmp_path / "global_hooks.json"
+        p = tmp_path / "proj"
+        p.mkdir()
+        with patch.object(sc, "_ANTIGRAVITY_GLOBAL_HOOKS_FILE", g):
+            sc.antigravity_hooks_file(project=p)
+        assert g.exists()
+        data = json.loads(g.read_text())
+        assert "Stop" in data["openjarvis"]
+        assert "PostToolUse" in data["openjarvis"]
+        proj_hooks = p / ".agents" / "hooks.json"
+        assert proj_hooks.exists()
+        pdata = json.loads(proj_hooks.read_text())
+        assert "Stop" in pdata["openjarvis"]
+        assert "PostToolUse" in pdata["openjarvis"]
 
     def test_names_do_not_collide(self) -> None:
         p = Path("/x/AI/openjarvis/repo")

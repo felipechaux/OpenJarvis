@@ -194,3 +194,60 @@ def test_build_summarizer_wraps_reply_as_data():
     rm.build_summarizer(engine, "ollama/llama3")("Hice X")
     assert captured["user"].startswith("<<<MENSAJE") and "Hice X" in captured["user"]
     assert engine.models == ["ollama/llama3"]
+
+
+@pytest.fixture()
+def antigravity_transcript(tmp_path: Path) -> Path:
+    path = tmp_path / "transcript.jsonl"
+    rows = [
+        {"type": "USER_INPUT", "content": "hazlo"},
+        {"type": "PLANNER_RESPONSE", "content": FINAL_REPLY},
+    ]
+    path.write_text("\n".join(json.dumps(r) for r in rows))
+    return path
+
+
+def test_antigravity_fast_summary_announcement(client, antigravity_transcript):
+    def summarize(_reply: str) -> str:
+        return "Se arregló Contactos. Tienes que habilitar Drive y Tasks."
+
+    rm.set_summarizer(summarize)
+    res = client.post(
+        "/v1/coding-sessions/events",
+        json={
+            "terminationReason": "model_stop",
+            "conversationId": "agy-s1",
+            "workspacePaths": ["/x/openjarvis/repo"],
+            "transcriptPath": str(antigravity_transcript),
+        },
+    )
+    assert res.json()["accepted"] is True
+    assert res.json()["id"] is not None
+    _wait_until(lambda: rm._events[0].get("_summary_done"))
+
+    events = _poll(client)["events"]
+    assert [e["text"] for e in events] == [
+        "Antigravity terminó en openjarvis. Se arregló Contactos. "
+        "Tienes que habilitar Drive y Tasks."
+    ]
+    assert events[0]["cli"] == "antigravity"
+
+
+def test_antigravity_fallback_to_first_sentence(client, antigravity_transcript):
+    rm.set_summarizer(lambda _r: "")
+    client.post(
+        "/v1/coding-sessions/events",
+        json={
+            "terminationReason": "model_stop",
+            "conversationId": "agy-s1",
+            "workspacePaths": ["/x/openjarvis/repo"],
+            "transcriptPath": str(antigravity_transcript),
+        },
+    )
+    _wait_until(lambda: rm._events[0].get("_summary_done"))
+    events = _poll(client)["events"]
+    assert events[0]["text"] == (
+        "Antigravity terminó en openjarvis: Restauré google.json y apliqué la "
+        "recomendación 1."
+    )
+

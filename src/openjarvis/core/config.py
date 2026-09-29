@@ -827,6 +827,9 @@ class LauncherConfig:
     progress_interval_s: float = 60.0
     # Browser ``open_url`` / ``spotify`` use ("Arc", "Safari"…); "" = system default.
     browser: str = ""
+    # Bypass tool permission prompts in started coding sessions
+    # (--dangerously-skip-permissions).
+    dangerously_skip_permissions: bool = False
 
 
 @dataclass

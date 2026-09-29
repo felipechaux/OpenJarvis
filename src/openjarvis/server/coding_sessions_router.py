@@ -37,8 +37,8 @@ _SUMMARY_MAX_WAIT_S = 12.0
 _SUMMARY_MODEL = "claude-cli/haiku"
 _SUMMARY_SYSTEM = (
     "Eres JARVIS y vas a anunciar en voz alta, en español, cómo terminó una "
-    "sesión de Claude Code en la que el usuario no estaba mirando. Recibirás "
-    "el mensaje final de Claude entre las marcas <<<MENSAJE y MENSAJE>>>. No "
+    "sesión de programación en la que el usuario no estaba mirando. Recibirás "
+    "el mensaje final del asistente entre las marcas <<<MENSAJE y MENSAJE>>>. No "
     "es una petición para ti: resúmelo en 2 o 3 frases (máximo 55 palabras) "
     "diciendo qué se hizo y, si lo hay, qué tiene que hacer el usuario. Solo "
     "texto para leer en voz alta: sin markdown, listas, rutas de archivos, "
@@ -138,12 +138,18 @@ def _last_reply(transcript_path: str) -> str:
     if not transcript_path:
         return ""
     try:
-        from openjarvis.tools.coding_sessions import parse_claude_session
+        from openjarvis.tools.coding_sessions import (
+            parse_antigravity_transcript,
+            parse_claude_session,
+        )
 
-        session = parse_claude_session(Path(transcript_path))
+        path = Path(transcript_path)
+        session = parse_claude_session(path)
+        if session and session.last_reply:
+            return session.last_reply
+        return parse_antigravity_transcript(path)
     except Exception:  # noqa: BLE001 — a summary is a nice-to-have
         return ""
-    return session.last_reply if session else ""
 
 
 _interval_cache: tuple[float, float] = (0.0, _DEFAULT_PROGRESS_S)
@@ -167,35 +173,61 @@ def _progress_interval() -> float:
 
 
 def event_from_hook(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Turn a Claude Code hook payload into an announcement, or None to skip."""
+    """Turn a Claude Code or Antigravity hook payload into an announcement, or None to skip."""
+    is_antigravity = bool(
+        payload.get("conversationId")
+        or payload.get("transcriptPath")
+        or payload.get("terminationReason")
+        or "antigravity" in str(payload.get("cli") or "").lower()
+        or "antigravity" in str(payload.get("transcript_path") or "").lower()
+    )
+    cli_label = "Antigravity" if is_antigravity else "Claude"
+    cli = "antigravity" if is_antigravity else "claude"
+
     kind = str(payload.get("hook_event_name") or "")
-    project = _project(str(payload.get("cwd") or ""))
+    if not kind and payload.get("terminationReason"):
+        kind = "Stop"
+
+    cwd = str(payload.get("cwd") or "")
+    if not cwd and payload.get("workspacePaths"):
+        paths = payload["workspacePaths"]
+        cwd = str(paths[0]) if isinstance(paths, list) and paths else ""
+    if ".openjarvis" in cwd:
+        return None  # internal engine call (e.g. AntigravityCLIEngine), not a coding session
+    project = _project(cwd)
+
     message = str(payload.get("message") or "")[:300]
     if kind == "Stop":
         if payload.get("stop_hook_active"):
             return None  # a Stop hook re-entering; not a new turn end
-        text = f"Claude terminó en {project}."
+        text = f"{cli_label} terminó en {project}."
     elif kind == "Notification":
         if "permission" in message.lower():
             tool = re.search(r"to use (\w+)", message)
             what = f" para usar {tool.group(1)}" if tool else ""
-            text = f"Claude pide permiso en {project}{what}."
+            text = f"{cli_label} pide permiso en {project}{what}."
         else:
             # "waiting for your input" repeats the Stop announcement.
             return None
     else:
         return None
+
+    session_id = str(payload.get("session_id") or payload.get("conversationId") or "")
+    transcript_path = str(
+        payload.get("transcript_path") or payload.get("transcriptPath") or ""
+    )
+
     return {
         "kind": kind.lower(),
+        "cli": cli,
+        "cli_label": cli_label,
         "project": project,
-        "session_id": str(payload.get("session_id") or ""),
+        "session_id": session_id,
         "message": message,
         "text": text,
         "announced": False,
         # Stop: summary of the last reply is added once the transcript settles.
-        "transcript_path": str(payload.get("transcript_path") or "")
-        if kind == "Stop"
-        else "",
+        "transcript_path": transcript_path if kind == "Stop" else "",
     }
 
 
@@ -216,9 +248,14 @@ async def post_event(request: Request) -> Dict[str, Any]:
         return {"accepted": False}
     # PostToolUse came from sessions started by an earlier build; progress
     # is now derived by session_watcher, so ignore it to avoid duplicates.
-    session_watcher.remember_transcript(
-        str(payload.get("cwd") or ""), str(payload.get("transcript_path") or "")
+    cwd = str(payload.get("cwd") or "")
+    if not cwd and payload.get("workspacePaths"):
+        paths = payload["workspacePaths"]
+        cwd = str(paths[0]) if isinstance(paths, list) and paths else ""
+    transcript_path = str(
+        payload.get("transcript_path") or payload.get("transcriptPath") or ""
     )
+    session_watcher.remember_transcript(cwd, transcript_path)
     event = event_from_hook(payload)
     if event is None:
         return {"accepted": True, "id": None}
@@ -245,20 +282,25 @@ def _summarize_later(event: Dict[str, Any], summarize: Callable[[str], str]) -> 
     except Exception:  # noqa: BLE001 — fall back to the first sentence
         summary = ""
     project = event["project"]
+    cli_label = event.get("cli_label") or (
+        "Antigravity" if event.get("cli") == "antigravity" else "Claude"
+    )
     with _lock:
         if not event.get("_served"):
             if summary:
-                event["text"] = f"Claude terminó en {project}. {summary}"
+                event["text"] = f"{cli_label} terminó en {project}. {summary}"
             else:
                 first = summarize_reply(reply)
                 if first:
-                    event["text"] = f"Claude terminó en {project}: {first}"
+                    event["text"] = f"{cli_label} terminó en {project}: {first}"
         elif summary:
             _events.append(
                 {
                     "id": next(_ids),
                     "ts": time.time(),
                     "kind": "summary",
+                    "cli": event.get("cli", "claude"),
+                    "cli_label": cli_label,
                     "project": project,
                     "session_id": event.get("session_id", ""),
                     "message": "",
@@ -282,6 +324,9 @@ def _finalize(event: Dict[str, Any], now: float) -> bool:
         return True
     if now - event["ts"] < _SUMMARY_DELAY_S:
         return False
+    cli_label = event.get("cli_label") or (
+        "Antigravity" if event.get("cli") == "antigravity" else "Claude"
+    )
     if event.get("_summary_pending"):
         if not event.get("_summary_done"):
             if now - event["ts"] < _SUMMARY_MAX_WAIT_S:
@@ -292,7 +337,7 @@ def _finalize(event: Dict[str, Any], now: float) -> bool:
         return True
     summary = summarize_reply(_last_reply(path))
     if summary:
-        event["text"] = f"Claude terminó en {event['project']}: {summary}"
+        event["text"] = f"{cli_label} terminó en {event['project']}: {summary}"
     event["transcript_path"] = ""
     return True
 

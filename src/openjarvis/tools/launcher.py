@@ -449,7 +449,12 @@ def _pick_cli(requested: str) -> str:
 
 
 def build_assistant_command(
-    cli: str, project: Path, task: str = "", session_id: str = "", settings: str = ""
+    cli: str,
+    project: Path,
+    task: str = "",
+    session_id: str = "",
+    settings: str = "",
+    dangerously_skip_permissions: bool = False,
 ) -> str:
     """Command line that starts an interactive ``cli`` session (no ``cd``).
 
@@ -465,6 +470,8 @@ def build_assistant_command(
         "gemini": _gemini_binary,
     }
     parts = [shlex.quote(binaries[cli]())]
+    if dangerously_skip_permissions:
+        parts.append("--dangerously-skip-permissions")
     if cli == "claude":
         if session_id:
             parts += ["--session-id", shlex.quote(session_id)]
@@ -479,10 +486,20 @@ def build_assistant_command(
 
 
 def build_session_command(
-    cli: str, project: Path, task: str = "", session_id: str = ""
+    cli: str,
+    project: Path,
+    task: str = "",
+    session_id: str = "",
+    dangerously_skip_permissions: bool = False,
 ) -> str:
     """Shell command that ``cd``s into ``project`` and starts ``cli`` there."""
-    command = build_assistant_command(cli, project, task, session_id)
+    command = build_assistant_command(
+        cli,
+        project,
+        task,
+        session_id,
+        dangerously_skip_permissions=dangerously_skip_permissions,
+    )
     return f"cd {shlex.quote(str(project))} && {command}"
 
 
@@ -501,10 +518,11 @@ class StartCodingSessionTool(BaseTool):
                 "window inside one of the user's projects. Uses Claude Code by "
                 "default; use cli='antigravity' ONLY when the user explicitly asks "
                 "for Antigravity, agy or Gemini (Google's agent). Optionally give "
-                "the assistant a first task. The session "
-                "keeps its normal permission prompts. Pair with open_app to also "
-                "open the project in an editor such as Antigravity, and use "
-                "coding_sessions afterwards to check on its progress."
+                "the assistant a first task. The session keeps its normal "
+                "permission prompts unless dangerously_skip_permissions is enabled. "
+                "Pair with open_app to also open the project in an editor such as "
+                "Antigravity, and use coding_sessions afterwards to check on its "
+                "progress."
             ),
             parameters={
                 "type": "object",
@@ -521,6 +539,13 @@ class StartCodingSessionTool(BaseTool):
                     "task": {
                         "type": "string",
                         "description": "Optional first instruction the user gave.",
+                    },
+                    "dangerously_skip_permissions": {
+                        "type": "boolean",
+                        "description": (
+                            "Bypass tool permission prompts. Default comes from "
+                            "[tools.launcher] dangerously_skip_permissions (false)."
+                        ),
                     },
                 },
                 "required": ["project"],
@@ -539,6 +564,13 @@ class StartCodingSessionTool(BaseTool):
         project, err = _project_or_error(tool, str(params.get("project") or ""), cfg)
         if err is not None:
             return err
+
+        skip_perms = params.get("dangerously_skip_permissions")
+        if skip_perms is None:
+            raw = getattr(cfg, "dangerously_skip_permissions", False)
+            skip_perms = raw if isinstance(raw, bool) else False
+        else:
+            skip_perms = bool(skip_perms)
 
         task = str(params.get("task") or "").strip()
         terminal = cfg.terminal or "Terminal"
@@ -567,15 +599,35 @@ class StartCodingSessionTool(BaseTool):
                             "tmux": tmux_name,
                         },
                     )
-                settings = str(sc.hooks_settings_file()) if cli == "claude" else ""
+                if cli == "claude":
+                    settings = str(sc.hooks_settings_file())
+                elif cli == "antigravity":
+                    sc.antigravity_hooks_file(project)
+                    settings = ""
+                else:
+                    settings = ""
                 command = build_assistant_command(
-                    cli, project, task, session_id, settings
+                    cli,
+                    project,
+                    task,
+                    session_id,
+                    settings,
+                    dangerously_skip_permissions=skip_perms,
                 )
                 sc.new_session(tmux_name, project, command)
                 _run_in_terminal(terminal, sc.attach_command(tmux_name))
             else:
+                if cli == "antigravity":
+                    sc.antigravity_hooks_file(project)
                 _run_in_terminal(
-                    terminal, build_session_command(cli, project, task, session_id)
+                    terminal,
+                    build_session_command(
+                        cli,
+                        project,
+                        task,
+                        session_id,
+                        dangerously_skip_permissions=skip_perms,
+                    ),
                 )
         except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
             detail = getattr(exc, "stderr", b"") or b""

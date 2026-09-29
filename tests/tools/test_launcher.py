@@ -252,20 +252,23 @@ class TestToolsExecution:
         cfg.app_aliases = {}
         cfg.terminal = "Terminal"
 
-        with patch("openjarvis.tools.launcher._launcher_config", return_value=cfg):
-            with patch(
+        with (
+            patch("openjarvis.tools.launcher._launcher_config", return_value=cfg),
+            patch("openjarvis.tools.session_control.antigravity_hooks_file"),
+            patch(
                 "openjarvis.tools.launcher._agy_binary",
                 return_value="/Users/me/.local/bin/agy",
-            ):
-                res = StartCodingSessionTool().execute(
-                    project="openjarvis", cli="gemini", task="optimiza la consulta"
-                )
-                assert res.success is True
-                assert "Started Antigravity CLI in Terminal" in res.content
-                assert res.metadata["cli"] == "antigravity"
-                script = mock_run.call_args[0][0][2]
-                assert "/Users/me/.local/bin/agy -i " in script
-                assert "optimiza la consulta" in script
+            ),
+        ):
+            res = StartCodingSessionTool().execute(
+                project="openjarvis", cli="gemini", task="optimiza la consulta"
+            )
+            assert res.success is True
+            assert "Started Antigravity CLI in Terminal" in res.content
+            assert res.metadata["cli"] == "antigravity"
+            script = mock_run.call_args[0][0][2]
+            assert "/Users/me/.local/bin/agy -i " in script
+            assert "optimiza la consulta" in script
 
 
 class TestTmuxLaunch:
@@ -319,12 +322,46 @@ class TestTmuxLaunch:
         new.assert_not_called()
         typed.assert_called_once_with("jarvis-openjarvis", "sigue")
 
+    def test_new_session_skips_permissions(self, tmp_path: Path) -> None:
+        (tmp_path / "openjarvis" / ".git").mkdir(parents=True)
+        cfg = self._cfg(tmp_path)
+        cfg.dangerously_skip_permissions = True
+        sc = "openjarvis.tools.session_control"
+        with (
+            patch("openjarvis.tools.launcher.sys.platform", "darwin"),
+            patch(
+                "openjarvis.tools.launcher._launcher_config",
+                return_value=cfg,
+            ),
+            patch(f"{sc}.tmux_bin", return_value="/bin/tmux"),
+            patch(f"{sc}.has_session", return_value=False),
+            patch(f"{sc}.hooks_settings_file", return_value=Path("/h.json")),
+            patch(f"{sc}.new_session") as new,
+            patch("openjarvis.tools.launcher._run_in_terminal"),
+            patch("openjarvis.tools.launcher._claude_binary", return_value="claude"),
+        ):
+            res = StartCodingSessionTool().execute(project="openjarvis")
+        assert res.success
+        _, _, command = new.call_args.args
+        assert "--dangerously-skip-permissions" in command
+
 
 class TestSessionCommand:
     def test_claude_task_is_positional_and_interactive(self, tmp_path: Path) -> None:
         with patch("openjarvis.tools.launcher._claude_binary", return_value="claude"):
             cmd = build_session_command("claude", tmp_path / "p", "hola mundo", "abc")
         assert cmd.endswith("claude --session-id abc --name 'jarvis: p' 'hola mundo'")
+
+    def test_claude_dangerously_skip_permissions(self, tmp_path: Path) -> None:
+        with patch("openjarvis.tools.launcher._claude_binary", return_value="claude"):
+            cmd = build_session_command(
+                "claude",
+                tmp_path / "p",
+                "hola",
+                "abc",
+                dangerously_skip_permissions=True,
+            )
+        assert "claude --dangerously-skip-permissions --session-id abc" in cmd
 
     def test_gemini_task_uses_prompt_interactive(self, tmp_path: Path) -> None:
         # A bare positional prompt makes gemini run one-shot and exit.
@@ -337,6 +374,17 @@ class TestSessionCommand:
             cmd = build_session_command("antigravity", tmp_path / "p", "hola")
         assert cmd.endswith("agy -i hola")
 
+    def test_antigravity_dangerously_skip_permissions(self, tmp_path: Path) -> None:
+        with patch("openjarvis.tools.launcher._agy_binary", return_value="agy"):
+            cmd = build_session_command(
+                "antigravity",
+                tmp_path / "p",
+                "hola",
+                dangerously_skip_permissions=True,
+            )
+        assert "agy --dangerously-skip-permissions -i hola" in cmd
+
     def test_no_task(self, tmp_path: Path) -> None:
         with patch("openjarvis.tools.launcher._gemini_binary", return_value="gemini"):
             assert build_session_command("gemini", tmp_path / "p").endswith("&& gemini")
+

@@ -43,21 +43,59 @@ _last_scan = 0.0
 
 def describe_action(tool: str, args: Dict[str, Any]) -> tuple[str, str]:
     """``(category, detail)`` for one tool call, used to build a summary."""
-    path = args.get("file_path") or args.get("notebook_path") or args.get("path") or ""
+    path = (
+        args.get("file_path")
+        or args.get("notebook_path")
+        or args.get("path")
+        or args.get("TargetFile")
+        or args.get("AbsolutePath")
+        or args.get("target_file")
+        or args.get("absolute_path")
+        or ""
+    )
     name = Path(str(path)).name if path else ""
-    if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
+    t_lower = tool.lower()
+    if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit") or t_lower in (
+        "write_to_file",
+        "replace_file_content",
+        "edit",
+        "write",
+    ):
         return "edit", name or "un archivo"
-    if tool == "Bash":
-        desc = str(args.get("description") or "").strip()
+    if tool == "Bash" or t_lower in ("run_command", "bash"):
+        desc = str(args.get("description") or args.get("toolSummary") or "").strip()
         if not desc:
-            desc = " ".join(str(args.get("command") or "").split()[:3])
+            cmd = str(args.get("command") or args.get("CommandLine") or "")
+            desc = " ".join(cmd.split()[:3])
         return "run", desc[:60]
-    if tool in ("Read", "Grep", "Glob", "LS"):
+    if tool in ("Read", "Grep", "Glob", "LS") or t_lower in (
+        "view_file",
+        "read",
+        "grep",
+        "glob",
+        "list_directory",
+    ):
         return "read", name
-    if tool in ("WebFetch", "WebSearch"):
+    if tool in ("WebFetch", "WebSearch") or t_lower in (
+        "webfetch",
+        "websearch",
+        "search_web",
+        "read_url_content",
+    ):
         return "web", ""
-    if tool in ("Task", "Agent"):
-        return "agent", str(args.get("description") or "")[:60]
+    if tool in ("Task", "Agent") or t_lower in (
+        "invoke_subagent",
+        "task",
+        "agent",
+        "subagent",
+    ):
+        desc = str(
+            args.get("description")
+            or args.get("toolSummary")
+            or args.get("Role")
+            or ""
+        )
+        return "agent", desc[:60]
     return "other", tool
 
 
@@ -121,7 +159,18 @@ def remember_transcript(cwd: str, transcript_path: str) -> None:
         return
     from openjarvis.tools import session_control as sc
 
-    _transcripts[sc.session_name(Path(cwd))] = transcript_path
+    matched = False
+    try:
+        resolved_cwd = str(Path(cwd).resolve())
+        for sname, sdir in sc.list_sessions():
+            if sdir and str(Path(sdir).resolve()) == resolved_cwd:
+                _transcripts[sname] = transcript_path
+                matched = True
+    except Exception:
+        pass
+    if not matched:
+        _transcripts[sc.session_name(Path(cwd))] = transcript_path
+        _transcripts[sc.session_name(Path(cwd), "antigravity")] = transcript_path
 
 
 def _transcript_for(name: str, launch_dir: str) -> Optional[Path]:
@@ -136,6 +185,13 @@ def _transcript_for(name: str, launch_dir: str) -> Optional[Path]:
         path = cs.CLAUDE_DIR / cs._claude_slug(launch_dir) / f"{sid}.jsonl"
         if path.exists():
             return path
+    if sc.session_cli(name) == "antigravity" and launch_dir:
+        for candidate in (
+            Path(launch_dir) / ".gemini" / "antigravity" / "transcript.jsonl",
+            Path(launch_dir) / ".gemini" / "antigravity-cli" / "transcript.jsonl",
+        ):
+            if candidate.exists():
+                return candidate
     return None
 
 
@@ -167,24 +223,58 @@ def read_new_actions(st: Dict[str, Any], path: Path) -> List[Tuple[str, str]]:
             entry = json.loads(line)
         except ValueError:
             continue
-        if entry.get("type") != "assistant":
-            continue
-        content = (entry.get("message") or {}).get("content")
-        for block in content if isinstance(content, list) else []:
-            if isinstance(block, dict) and block.get("type") == "tool_use":
-                args = block.get("input")
-                actions.append(
-                    describe_action(
-                        str(block.get("name") or ""),
-                        args if isinstance(args, dict) else {},
+        if entry.get("type") == "assistant":
+            content = (entry.get("message") or {}).get("content")
+            for block in content if isinstance(content, list) else []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    args = block.get("input")
+                    actions.append(
+                        describe_action(
+                            str(block.get("name") or ""),
+                            args if isinstance(args, dict) else {},
+                        )
                     )
-                )
+        elif entry.get("type") == "PLANNER_RESPONSE":
+            for tc in entry.get("tool_calls") or []:
+                if isinstance(tc, dict):
+                    tname = tc.get("name") or tc.get("toolAction") or ""
+                    targs = tc.get("args") or {}
+                    actions.append(
+                        describe_action(
+                            str(tname),
+                            targs if isinstance(targs, dict) else {},
+                        )
+                    )
     return actions
 
 
-def _progress_event(name: str, project: str, text: str) -> Dict[str, Any]:
+def _is_working(
+    screen: str, actions: List[Tuple[str, str]], cli: str = "claude"
+) -> bool:
+    s = screen.lower()
+    if cli == "antigravity":
+        if bool(actions):
+            return True
+        return any(
+            mark in s
+            for mark in (
+                "esc to interrupt",
+                "esc to cancel",
+                "thinking",
+                "generating",
+            )
+        )
+    return _WORKING_MARK in s
+
+
+def _progress_event(
+    name: str, project: str, text: str, cli: str = "claude"
+) -> Dict[str, Any]:
+    cli_label = "Antigravity" if cli == "antigravity" else "Claude"
     return {
         "kind": "progress",
+        "cli": cli,
+        "cli_label": cli_label,
         "project": project,
         "session_id": name,  # stable per tmux session, used to supersede
         "message": "",
@@ -201,10 +291,11 @@ def step(
     actions: List[Tuple[str, str]],
     now: float,
     interval: float,
+    cli: str = "claude",
 ) -> Optional[Dict[str, Any]]:
     """Advance one session's state; return a progress event when due."""
     st = _state.setdefault(name, {})
-    if _WORKING_MARK not in screen:
+    if not _is_working(screen, actions, cli=cli):
         st.update(working_since=None, actions=[], last_emit=0.0)
         return None
     if not st.get("working_since"):
@@ -212,26 +303,28 @@ def step(
         st.update(working_since=now - (elapsed or 0), actions=[], last_emit=0.0)
     st["actions"] = st.get("actions", []) + actions
     reference = st["last_emit"] or st["working_since"]
+    cli_label = "Antigravity" if cli == "antigravity" else "Claude"
     if st["actions"]:
         wait = interval if st["last_emit"] else _FIRST_PROGRESS_S
         if now - reference < wait:
             return None
-        text = f"Claude sigue en {project}: {summarize_actions(st['actions'])}."
+        text = f"{cli_label} sigue en {project}: {summarize_actions(st['actions'])}."
     else:
         if now - reference < max(interval * _HEARTBEAT_FACTOR, _FIRST_PROGRESS_S):
             return None
         elapsed = _elapsed_from_screen(screen)
         worked = elapsed if elapsed is not None else now - st["working_since"]
         text = (
-            f"Claude sigue trabajando en {project}; lleva {_spoken_duration(worked)}."
+            f"{cli_label} sigue trabajando en {project}; "
+            f"lleva {_spoken_duration(worked)}."
         )
     st["actions"] = []
     st["last_emit"] = now
-    return _progress_event(name, project, text)
+    return _progress_event(name, project, text, cli=cli)
 
 
 def scan(now: Optional[float] = None, interval: float = 60.0) -> List[Dict[str, Any]]:
-    """Progress events due across all live JARVIS Claude sessions."""
+    """Progress events due across all live JARVIS Claude/Antigravity sessions."""
     global _last_scan
     from openjarvis.tools import session_control as sc
 
@@ -242,7 +335,8 @@ def scan(now: Optional[float] = None, interval: float = 60.0) -> List[Dict[str, 
     events = []
     live = set()
     for name, launch_dir in sc.list_sessions():
-        if sc.session_cli(name) != "claude":
+        cli = sc.session_cli(name)
+        if cli not in ("claude", "antigravity"):
             continue
         live.add(name)
         st = _state.setdefault(name, {})
@@ -250,7 +344,7 @@ def scan(now: Optional[float] = None, interval: float = 60.0) -> List[Dict[str, 
         actions = read_new_actions(st, transcript) if transcript else []
         screen = sc.capture_screen(name, lines=15)
         project = sc.project_label(Path(launch_dir)) if launch_dir else name
-        event = step(name, project, screen, actions, now, interval)
+        event = step(name, project, screen, actions, now, interval, cli=cli)
         if event is not None:
             events.append(event)
     for gone in set(_state) - live:

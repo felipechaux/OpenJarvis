@@ -225,6 +225,25 @@ def parse_claude_session(path: Path, now: Optional[float] = None) -> Optional[Se
     return sess
 
 
+def parse_antigravity_transcript(path: Path) -> str:
+    """Extract the last textual reply from an Antigravity transcript.jsonl."""
+    try:
+        lines = _read_tail_lines(path)
+    except OSError:
+        return ""
+    last_reply = ""
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if entry.get("type") == "PLANNER_RESPONSE":
+            content = entry.get("content")
+            if isinstance(content, str) and content.strip():
+                last_reply = content.strip()
+    return last_reply
+
+
 def _claude_files(since: float) -> Iterable[Path]:
     if not CLAUDE_DIR.is_dir():
         return []
