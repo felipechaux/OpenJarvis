@@ -18,6 +18,11 @@ if TYPE_CHECKING:
     from openjarvis.connectors.retriever import TwoStageRetriever
 
 
+# Chat conversations indexed by server/chat_history_router.py.
+CHAT_SOURCE = "jarvis_chat"
+_CHAT_HEADROOM = 20
+
+
 @ToolRegistry.register("knowledge_search")
 class KnowledgeSearchTool(BaseTool):
     """Search the knowledge store using filtered BM25 retrieval.
@@ -43,8 +48,12 @@ class KnowledgeSearchTool(BaseTool):
             name="knowledge_search",
             description=(
                 "Search your personal knowledge base (emails, Slack messages,"
-                " notes, documents, and contacts) to answer questions about"
+                " notes, documents, contacts, and past chat conversations"
+                " between the user and JARVIS) to answer questions about"
                 " your life, profile, and history using full-text retrieval."
+                " Past chats are only searched with source='jarvis_chat' —"
+                " use it for 'what did we talk about X'; they hold what the"
+                " user said, so summarise them in the past tense."
             ),
             parameters={
                 "type": "object",
@@ -57,7 +66,7 @@ class KnowledgeSearchTool(BaseTool):
                         "type": "string",
                         "description": (
                             "Filter by source connector"
-                            " (e.g. 'gmail', 'slack', 'obsidian')."
+                            " (e.g. 'gmail', 'apple_notes', 'jarvis_chat')."
                         ),
                     },
                     "doc_type": {
@@ -122,10 +131,15 @@ class KnowledgeSearchTool(BaseTool):
         since: Optional[str] = params.get("since")
         until: Optional[str] = params.get("until")
 
+        # Past chats only come back when asked for: otherwise JARVIS's old
+        # replies outrank the user's real notes and get repeated as facts.
+        hide_chats = not source
+        fetch_k = top_k + _CHAT_HEADROOM if hide_chats else top_k
+
         if self._retriever is not None:
             results = self._retriever.retrieve(
                 query,
-                top_k=top_k,
+                top_k=fetch_k,
                 source=source or "",
                 doc_type=doc_type or "",
                 author=author or "",
@@ -135,13 +149,20 @@ class KnowledgeSearchTool(BaseTool):
         else:
             results = self._store.retrieve(  # type: ignore[union-attr]
                 query,
-                top_k=top_k,
+                top_k=fetch_k,
                 source=source,
                 doc_type=doc_type,
                 author=author,
                 since=since,
                 until=until,
             )
+
+        if hide_chats:
+            results = [
+                r
+                for r in results
+                if (r.source or r.metadata.get("source", "")) != CHAT_SOURCE
+            ][:top_k]
 
         if not results:
             return ToolResult(

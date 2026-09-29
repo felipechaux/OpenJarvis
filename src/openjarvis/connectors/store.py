@@ -10,6 +10,7 @@ Pure Python ``sqlite3`` (no Rust extension required).
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -87,6 +88,26 @@ CREATE INDEX IF NOT EXISTS idx_kc_doc_id     ON knowledge_chunks(doc_id);
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
+
+def _any_term_query(query: str) -> str:
+    """FTS5 query matching any word of *query* (quoted, so punctuation is safe).
+
+    Spellings are bridged both ways: adjacent words are also tried joined
+    ("dado match" -> "dadomatch"), CamelCase words split into a phrase
+    ("DadoMatch" -> "dado match"), and every word as a prefix, so
+    "DadoMatch" also finds "DadoMatchProject".
+    """
+    words = [w for w in re.findall(r"\w+", query, flags=re.UNICODE) if len(w) > 1]
+    terms = [f'"{w}"' for w in words]
+    terms += [f'"{a}{b}"' for a, b in zip(words, words[1:])]
+    for w in words:
+        parts = re.findall(r"[A-ZÁÉÍÓÚÑ]?[a-záéíóúñ0-9]+|[A-ZÁÉÍÓÚÑ]+(?![a-z])", w)
+        if len(parts) > 1:
+            terms.append('"' + " ".join(parts) + '"')
+        if len(w) >= 4:
+            terms.append(f'"{w}"*')
+    return " OR ".join(dict.fromkeys(terms))
 
 
 def _to_iso(ts: Optional[Union[datetime, str]]) -> str:
@@ -311,8 +332,19 @@ class KnowledgeStore(MemoryBackend):
         try:
             rows = self._conn.execute(sql, [query] + params + [top_k]).fetchall()
         except sqlite3.OperationalError:
-            # Malformed FTS query — return empty rather than crash
-            return []
+            rows = []  # malformed FTS query ("DadoMatch?") — try the fallback
+        if not rows:
+            # FTS5 ANDs the terms, so "DadoMatch project" finds nothing when
+            # no chunk says "project".  Retry with any term (bm25 still ranks
+            # chunks matching more of them first).
+            loose = _any_term_query(query)
+            if loose and loose != query:
+                try:
+                    rows = self._conn.execute(
+                        sql, [loose] + params + [top_k]
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    return []
 
         results: List[RetrievalResult] = []
         for row in rows:

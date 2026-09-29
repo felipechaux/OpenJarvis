@@ -18,6 +18,14 @@ function formatRelativeTime(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString();
 }
 
+function normalizeForSearch(text: string): string {
+  return (text || '')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+}
+
 export function ConversationList({ searchQuery }: Props) {
   const navigate = useNavigate();
   const conversations = useAppStore((s) => s.conversations);
@@ -25,9 +33,14 @@ export function ConversationList({ searchQuery }: Props) {
   const selectConversation = useAppStore((s) => s.selectConversation);
   const deleteConversation = useAppStore((s) => s.deleteConversation);
 
-  const filtered = searchQuery
-    ? conversations.filter((c) =>
-        c.title.toLowerCase().includes(searchQuery.toLowerCase()),
+  // Titles are mostly "New chat", so search the messages too — ignoring
+  // case, accents and spaces ("dado match" finds "DadoMatch").
+  const needle = normalizeForSearch(searchQuery);
+  const filtered = needle
+    ? conversations.filter(
+        (c) =>
+          normalizeForSearch(c.title).includes(needle) ||
+          c.messages.some((m) => normalizeForSearch(m.content).includes(needle)),
       )
     : conversations;
 

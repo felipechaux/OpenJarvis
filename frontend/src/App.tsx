@@ -19,6 +19,7 @@ import { useWakeWord } from './hooks/useWakeWord';
 import { useCompanionMode } from './hooks/useCompanionMode';
 import { useEarcons } from './hooks/useEarcons';
 import { useSessionAnnouncements } from './hooks/useSessionAnnouncements';
+import { useChatIndexing } from './hooks/useChatIndexing';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -180,6 +181,7 @@ export default function App() {
   useCompanionMode({ registerShortcut: setupDone });
   useEarcons();
   useSessionAnnouncements(setupDone);
+  useChatIndexing(setupDone);
 
   // Global keyboard shortcuts
   useEffect(() => {
