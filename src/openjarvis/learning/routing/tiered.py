@@ -28,6 +28,21 @@ _DEEP_PATTERNS = re.compile(
     re.IGNORECASE,
 )
 
+# Memory and personal-knowledge requests go to the strong model: the fast
+# one claimed to have saved facts it never saved, and repeated retrieved
+# past replies as if they were its own answer.
+_MEMORY_PATTERNS = re.compile(
+    r"\brecuerd\w*|\bacu[eé]rdate\b|\bmemoriz\w*|\bolvid\w*|\banot[ae]\w*"
+    r"|\bapunt[ae]\w*|\bguard[ae]\w*"
+    r"|\bqu[eé] (?:hablamos|dijimos|charlamos|conversamos|platicamos)\b"
+    r"|\b(?:hablamos|conversamos|charlamos) (?:de|sobre)\b"
+    r"|\bsobre m[ií]\b|\bde m[ií]\b|\bmi perfil\b|\bmis datos\b"
+    r"|\bnodos?\b|\bgrafo\b"
+    r"|\bremember\w*|\bforget\b|\babout me\b|\bmy profile\b"
+    r"|\bwhat did (?:we|i) (?:talk|discuss|say)\w*",
+    re.IGNORECASE,
+)
+
 # The desktop app's daily briefing prompt: long, but it only asks for a
 # summary of tool output, which the fast model handles.
 _BRIEFING_MARKER = "JARVIS_WELCOME_TRIGGER"
@@ -57,6 +72,9 @@ def needs_strong_model(query: str) -> tuple[bool, str]:
     match = _DEEP_PATTERNS.search(query)
     if match:
         return True, f"keyword {match.group(0)!r}"
+    match = _MEMORY_PATTERNS.search(query)
+    if match:
+        return True, f"memory {match.group(0)!r}"
     return False, f"complexity tier {result.tier}"
 
 

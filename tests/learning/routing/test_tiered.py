@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from openjarvis.learning.routing.tiered import route_tier
+from openjarvis.learning.routing.tiered import needs_strong_model, route_tier
 
 FAST = "claude-cli/haiku"
 STRONG = "claude-cli/opus"
@@ -62,3 +62,23 @@ def test_daily_briefing_uses_fast_model_without_escalation():
     decision = _route("JARVIS_WELCOME_TRIGGER: DEBES llamar a get_weather..." + "x" * 900)
     assert decision.model == FAST
     assert decision.escalation_model == ""
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "¿Qué hablamos tú y yo sobre DadoMatch?",
+        "Recuerda que DadoMatch ya está en las tiendas de iOS",
+        "modifica el nodo de DadoMatch",
+        "¿qué sabes de mí?",
+        "what did we talk about yesterday",
+    ],
+)
+def test_memory_requests_use_the_strong_model(query: str) -> None:
+    strong, reason = needs_strong_model(query)
+    assert strong and reason.startswith("memory")
+
+
+@pytest.mark.parametrize("query", ["pon música", "¿qué clima hace?", "hola jarvis"])
+def test_small_talk_stays_fast(query: str) -> None:
+    assert needs_strong_model(query)[0] is False
