@@ -176,7 +176,7 @@ def serve(
         else:
             _present = {engine_name}
         _extras = []
-        for _key in ("claude_cli", "antigravity_cli", "ollama"):
+        for _key in ("claude_cli", "antigravity_cli", "gemini_cli", "ollama"):
             if _key in _present or not EngineRegistry.contains(_key):
                 continue
             _cand = _make_engine(_key, config)

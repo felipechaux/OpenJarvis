@@ -19,6 +19,7 @@ from openjarvis.agents.prompt_loader import (
 from openjarvis.core.events import EventBus
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall, ToolResult, _message_to_dict
+from openjarvis.engine import quota
 from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool, build_tool_descriptions
 
@@ -391,7 +392,7 @@ class NativeReActAgent(ToolUsingAgent):
 
     def _can_escalate(self) -> bool:
         target = self._escalation_model
-        return bool(target) and target != self._model
+        return bool(target) and target != self._model and quota.is_available(target)
 
     def _compose_system_prompt(
         self,
@@ -507,14 +508,25 @@ class NativeReActAgent(ToolUsingAgent):
         )
         self._switch_model(messages, input, context, self._escalation_model)
 
-    def _fallback_model(self) -> str:
-        """The configured backup model, or "" when there is none to try."""
+    @staticmethod
+    def _fallback_chain() -> list[str]:
+        """The configured backup models, in the order they are tried."""
         try:
             from openjarvis.core.config import load_config
-            fallback = load_config().intelligence.fallback_model
+            intel = load_config().intelligence
         except Exception:
-            return ""
-        return fallback if fallback and fallback != self._model else ""
+            return []
+        chain = list(intel.fallback_models or [])
+        if not chain and intel.fallback_model:
+            chain = [intel.fallback_model]
+        return [m for m in chain if m]
+
+    def _next_fallback(self, tried: set[str]) -> str:
+        """First backup not tried this turn whose provider has quota, or ""."""
+        for model in self._fallback_chain():
+            if model not in tried and model != self._model and quota.is_available(model):
+                return model
+        return ""
 
     def _switch_model(
         self,
@@ -548,6 +560,20 @@ class NativeReActAgent(ToolUsingAgent):
 
         self._reset_loop_guard()
 
+        # The chosen model's subscription ran out earlier: start the turn on
+        # a backup instead of burning a call that is known to fail.
+        tried: set[str] = set()
+        notices: list[str] = []
+        if not quota.is_available(self._model):
+            backup = self._next_fallback({self._model})
+            if backup:
+                logger.info(
+                    "native_react: %s on quota cooldown; using %s",
+                    self._model, backup,
+                )
+                tried.add(self._model)
+                self._model = backup
+
         system_prompt = self._compose_system_prompt(
             input, context, allow_escalation=self._can_escalate()
         )
@@ -566,7 +592,6 @@ class NativeReActAgent(ToolUsingAgent):
 
         all_tool_results: list[ToolResult] = []
         turns = 0
-        fallback_used = False
         # Session guard: once third-party text is in play, this turn may not
         # steer a coding session (see agents/session_guard.py).
         tainted = session_guard.has_injected_context(messages)
@@ -585,17 +610,21 @@ class NativeReActAgent(ToolUsingAgent):
             try:
                 result = self._generate(messages)
             except Exception as exc:
-                # The primary provider is down or out of quota: finish the
-                # turn on the backup model (another provider) rather than
-                # failing it.  Only once per turn.
-                fallback = "" if fallback_used else self._fallback_model()
+                # The provider is down or out of quota: finish the turn on the
+                # next backup (another provider) rather than failing it.  A
+                # quota error also parks the provider until its reset.
+                failed = self._model
+                tried.add(failed)
+                if quota.is_quota_error(str(exc)):
+                    until = quota.mark_exhausted(failed, str(exc))
+                    notices.append(_quota_notice(failed, until))
+                fallback = self._next_fallback(tried)
                 if not fallback:
                     raise
                 logger.warning(
                     "native_react: %s failed (%s); falling back to %s",
-                    self._model, str(exc)[:200], fallback,
+                    failed, str(exc)[:200], fallback,
                 )
-                fallback_used = True
                 self._switch_model(messages, input, context, fallback)
                 continue
             usage = result.get("usage", {})
@@ -610,7 +639,9 @@ class NativeReActAgent(ToolUsingAgent):
                 self._emit_turn_end(turns=turns)
                 msg_dicts = [_message_to_dict(m) for m in messages]
                 return AgentResult(
-                    content=self._scrub_tool_artifacts(parsed["final_answer"]),
+                    content=_with_notices(
+                        self._scrub_tool_artifacts(parsed["final_answer"]), notices
+                    ),
                     tool_results=all_tool_results,
                     turns=turns,
                     metadata={**total_usage, "messages": msg_dicts},
@@ -633,7 +664,9 @@ class NativeReActAgent(ToolUsingAgent):
                 self._emit_turn_end(turns=turns)
                 msg_dicts = [_message_to_dict(m) for m in messages]
                 return AgentResult(
-                    content=self._scrub_tool_artifacts(content),
+                    content=_with_notices(
+                        self._scrub_tool_artifacts(content), notices
+                    ),
                     tool_results=all_tool_results,
                     turns=turns,
                     metadata={**total_usage, "messages": msg_dicts},
@@ -751,5 +784,32 @@ def _strip_thought_protocol(prompt: str) -> str:
         "\n\nDo not write out your reasoning.  Reply with only the `Action:` / "
         "`Action Input:` lines or a `Final Answer:` line."
     )
+
+
+_PROVIDER_NAMES = {
+    "claude-cli": "Claude",
+    "antigravity": "Antigravity",
+    "gemini-cli": "Gemini API",
+}
+
+
+def _quota_notice(model: str, until: float) -> str:
+    """Spoken one-liner telling the user a subscription ran out."""
+    from datetime import datetime
+
+    provider = quota.provider_of(model)
+    name = _PROVIDER_NAMES.get(provider, provider)
+    when = datetime.fromtimestamp(until)
+    clock = when.strftime("%H:%M")
+    if when.date() != datetime.now().date():
+        clock = when.strftime("%d/%m %H:%M")
+    return f"{name} se quedó sin cuota hasta las {clock}; sigo con otro modelo."
+
+
+def _with_notices(content: str, notices: list[str]) -> str:
+    """Prefix the quota notices raised this turn to the answer."""
+    if not notices:
+        return content
+    return " ".join(dict.fromkeys(notices)) + "\n\n" + content
 
 __all__ = ["NativeReActAgent", "REACT_SYSTEM_PROMPT", "REACT_SYSTEM_PROMPT_COMPACT"]

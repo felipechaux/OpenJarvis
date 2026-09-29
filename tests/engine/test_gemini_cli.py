@@ -156,7 +156,9 @@ class TestGenerate:
 
 
 class TestAuthModes:
-    def test_subscription_uses_users_login(self) -> None:
+    def test_subscription_uses_users_login(self, monkeypatch) -> None:
+        # Independent of the user's own config.toml gemini_cli_auth.
+        monkeypatch.setenv("OPENJARVIS_GEMINI_AUTH", "subscription")
         env = _engine()._child_env()
         assert "GEMINI_CLI_HOME" not in env
 

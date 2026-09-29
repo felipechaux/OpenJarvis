@@ -10,6 +10,7 @@ import pytest
 from openjarvis.agents.native_react import NativeReActAgent
 from openjarvis.agents.session_guard import BLOCKED_MESSAGE
 from openjarvis.core.types import ToolResult
+from openjarvis.engine import quota
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 from openjarvis.tools.storage.context import CONTEXT_PREFIX
 from openjarvis.agents._stubs import AgentContext
@@ -121,6 +122,17 @@ def test_injected_knowledge_context_taints_from_the_start():
 # ── Provider fallback ──────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _fresh_quota():
+    quota.clear()
+    yield
+    quota.clear()
+
+
+def _chain(monkeypatch, *models):
+    monkeypatch.setattr(NativeReActAgent, "_fallback_chain", staticmethod(lambda: list(models)))
+
+
 def test_failed_provider_falls_back_and_rebuilds_prompt(monkeypatch):
     engine = MagicMock()
     seen = []
@@ -133,30 +145,55 @@ def test_failed_provider_falls_back_and_rebuilds_prompt(monkeypatch):
 
     engine.generate.side_effect = _generate
     agent = _agent(engine, [])
-    monkeypatch.setattr(agent, "_fallback_model", lambda: "antigravity/flash")
+    _chain(monkeypatch, "antigravity/flash")
     result = agent.run("hola")
-    assert result.content == "respaldo"
+    assert result.content.endswith("respaldo")
+    assert "Claude se quedó sin cuota" in result.content
     assert [m for m, _ in seen] == ["claude-cli/haiku", "antigravity/flash"]
     assert agent._model == "antigravity/flash"
     # Non-Claude models get the full ReAct prompt, not the compact one.
     assert "NEVER emit" in seen[1][1]
 
 
-def test_fallback_is_tried_once_then_the_error_surfaces(monkeypatch):
+def test_chain_is_walked_in_order_then_the_error_surfaces(monkeypatch):
     engine = MagicMock()
     engine.generate.side_effect = RuntimeError("down")
     agent = _agent(engine, [])
-    monkeypatch.setattr(agent, "_fallback_model", lambda: "antigravity/flash")
+    _chain(monkeypatch, "antigravity/flash", "gemini-cli/flash")
     with pytest.raises(RuntimeError):
         agent.run("hola")
-    assert engine.generate.call_count == 2
+    models = [c.kwargs["model"] for c in engine.generate.call_args_list]
+    assert models == ["claude-cli/haiku", "antigravity/flash", "gemini-cli/flash"]
+
+
+def test_outage_does_not_park_the_provider(monkeypatch):
+    engine = MagicMock()
+    engine.generate.side_effect = [RuntimeError("down"), _response("Final Answer: ok")]
+    agent = _agent(engine, [])
+    _chain(monkeypatch, "antigravity/flash")
+    result = agent.run("hola")
+    assert result.content == "ok"
+    assert quota.is_available("claude-cli/haiku")
+
+
+def test_exhausted_provider_is_skipped_on_later_turns(monkeypatch):
+    quota.mark_exhausted("claude-cli/haiku", "usage limit reached")
+    engine = MagicMock()
+    engine.generate.return_value = _response("Final Answer: ok")
+    agent = _agent(engine, [])
+    _chain(monkeypatch, "antigravity/flash", "gemini-cli/flash")
+    result = agent.run("hola")
+    assert result.content == "ok"  # announced when it ran out, not every turn
+    assert [c.kwargs["model"] for c in engine.generate.call_args_list] == [
+        "antigravity/flash"
+    ]
 
 
 def test_without_fallback_the_error_surfaces(monkeypatch):
     engine = MagicMock()
     engine.generate.side_effect = RuntimeError("down")
     agent = _agent(engine, [])
-    monkeypatch.setattr(agent, "_fallback_model", lambda: "")
+    _chain(monkeypatch)
     with pytest.raises(RuntimeError):
         agent.run("hola")
 

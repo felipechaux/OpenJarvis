@@ -33,6 +33,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
+from openjarvis.engine import quota
 from openjarvis.tools import session_control as sc
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
@@ -445,6 +446,10 @@ def _pick_cli(requested: str) -> str:
         or "antigravity" in cli
     ):
         return "antigravity"
+    # The Claude subscription ran out (seen by the chat agent): a session
+    # there would only print the limit, so start Antigravity instead.
+    if not quota.is_available("claude-cli/"):
+        return "antigravity"
     return "claude"
 
 
@@ -636,6 +641,8 @@ class StartCodingSessionTool(BaseTool):
             )
 
         extra = f" with the task: {task}" if task else ""
+        if cli == "antigravity" and not quota.is_available("claude-cli/"):
+            extra += " (Claude is out of quota for now, so Antigravity was used)"
         return ToolResult(
             tool_name=tool,
             content=(
