@@ -110,9 +110,7 @@ def test_announcement_waits_for_the_summary(client, transcript):
     assert _poll(client)["events"][0]["text"].endswith("Resumen listo para decir.")
 
 
-def test_slow_summary_follows_as_its_own_announcement(
-    client, transcript, monkeypatch
-):
+def test_slow_summary_follows_as_its_own_announcement(client, transcript, monkeypatch):
     monkeypatch.setattr(rm, "_SUMMARY_MAX_WAIT_S", 0.05)
     release = threading.Event()
     rm.set_summarizer(lambda _r: (release.wait(3), "Se arregló todo al final.")[1])
@@ -207,7 +205,14 @@ def antigravity_transcript(tmp_path: Path) -> Path:
     return path
 
 
-def test_antigravity_fast_summary_announcement(client, antigravity_transcript):
+@pytest.fixture()
+def agy_live(monkeypatch):
+    monkeypatch.setattr(rm, "_is_jarvis_agy_session", lambda _cwd: True)
+
+
+def test_antigravity_fast_summary_announcement(
+    client, antigravity_transcript, agy_live
+):
     def summarize(_reply: str) -> str:
         return "Se arregló Contactos. Tienes que habilitar Drive y Tasks."
 
@@ -233,7 +238,9 @@ def test_antigravity_fast_summary_announcement(client, antigravity_transcript):
     assert events[0]["cli"] == "antigravity"
 
 
-def test_antigravity_fallback_to_first_sentence(client, antigravity_transcript):
+def test_antigravity_fallback_to_first_sentence(
+    client, antigravity_transcript, agy_live
+):
     rm.set_summarizer(lambda _r: "")
     client.post(
         "/v1/coding-sessions/events",
@@ -251,3 +258,37 @@ def test_antigravity_fallback_to_first_sentence(client, antigravity_transcript):
         "recomendación 1."
     )
 
+
+def test_antigravity_outside_jarvis_sessions_is_ignored(client, monkeypatch):
+    # agy's hooks are global: the user's own runs and the server's engine
+    # calls fire them too.
+    monkeypatch.setattr(rm, "_is_jarvis_agy_session", lambda _cwd: False)
+    res = client.post(
+        "/v1/coding-sessions/events",
+        json={"terminationReason": "model_stop", "workspacePaths": ["/x/p"]},
+    )
+    assert res.json() == {"accepted": True, "id": None}
+    assert len(rm._events) == 0
+
+
+def test_declared_post_tool_use_is_not_a_stop(client, agy_live):
+    res = client.post(
+        "/v1/coding-sessions/events",
+        headers={"X-OpenJarvis-Hook": "PostToolUse", "X-OpenJarvis-CLI": "antigravity"},
+        json={
+            "terminationReason": "x",
+            "conversationId": "c",
+            "workspacePaths": ["/x/p"],
+        },
+    )
+    assert res.json()["id"] is None
+
+
+def test_declared_stop_is_announced(client, agy_live):
+    res = client.post(
+        "/v1/coding-sessions/events",
+        headers={"X-OpenJarvis-Hook": "Stop", "X-OpenJarvis-CLI": "antigravity"},
+        json={"workspacePaths": ["file:///x/openjarvis/repo"]},
+    )
+    assert res.json()["id"] is not None
+    assert rm._events[0]["text"] == "Antigravity terminó en openjarvis."

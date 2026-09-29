@@ -307,9 +307,7 @@ class TestProgress:
             watcher.describe_action(
                 "run_command", {"toolSummary": "Run pytest", "CommandLine": "pytest"}
             ),
-            watcher.describe_action(
-                "invoke_subagent", {"Role": "Codebase Researcher"}
-            ),
+            watcher.describe_action("invoke_subagent", {"Role": "Codebase Researcher"}),
         ]
         assert watcher.summarize_actions(actions) == (
             "editó launcher.py, ejecutó Run pytest, "
@@ -348,9 +346,7 @@ class TestProgress:
         t0 = 1000.0
         screen = "Thinking... Esc to cancel"
         assert (
-            watcher.step(
-                "s-agy", "openjarvis", screen, edit, t0, 60, cli="antigravity"
-            )
+            watcher.step("s-agy", "openjarvis", screen, edit, t0, 60, cli="antigravity")
             is None
         )
         res = watcher.step(
@@ -370,6 +366,25 @@ class TestProgress:
         assert res["cli"] == "antigravity"
         assert res["cli_label"] == "Antigravity"
 
+    def test_antigravity_idle_when_transcript_stops(self) -> None:
+        t0 = 5000.0
+        # "Thinking" left on screen must not keep an idle session "working".
+        screen = "Thinking about it"
+        watcher.step("s-idle", "p", screen, [("edit", "a.py")], t0, 60, "antigravity")
+        late = t0 + watcher._AGY_IDLE_S + 1
+        assert watcher.step("s-idle", "p", screen, [], late, 60, "antigravity") is None
+        assert watcher._state["s-idle"]["working_since"] is None
+
+    def test_antigravity_args_are_json_decoded(self) -> None:
+        # agy's transcript stores every argument JSON-encoded.
+        assert watcher.describe_action(
+            "run_command",
+            {"CommandLine": '"git status -s"', "toolSummary": '"Git status check"'},
+        ) == ("run", "Git status check")
+        assert watcher.describe_action(
+            "replace_file_content", {"TargetFile": '"/a/launcher.py"'}
+        ) == ("edit", "launcher.py")
+
     def test_hooks_only_stop_and_notification(self, tmp_path: Path) -> None:
         with patch.object(sc, "_HOOKS_FILE", tmp_path / "hooks.json"):
             data = json.loads(sc.hooks_settings_file().read_text())
@@ -384,20 +399,25 @@ class TestAntigravitySessions:
     ]
 
     def test_antigravity_hooks_file(self, tmp_path: Path) -> None:
-        g = tmp_path / "global_hooks.json"
-        p = tmp_path / "proj"
-        p.mkdir()
+        g = tmp_path / "config" / "hooks.json"
+        g.parent.mkdir()
+        g.write_text(json.dumps({"mine": {"Stop": []}}))
         with patch.object(sc, "_ANTIGRAVITY_GLOBAL_HOOKS_FILE", g):
-            sc.antigravity_hooks_file(project=p)
-        assert g.exists()
+            sc.antigravity_hooks_file()
         data = json.loads(g.read_text())
-        assert "Stop" in data["openjarvis"]
-        assert "PostToolUse" in data["openjarvis"]
-        proj_hooks = p / ".agents" / "hooks.json"
-        assert proj_hooks.exists()
-        pdata = json.loads(proj_hooks.read_text())
-        assert "Stop" in pdata["openjarvis"]
-        assert "PostToolUse" in pdata["openjarvis"]
+        assert data["mine"] == {"Stop": []}  # the user's own group is kept
+        stop = data["openjarvis"]["Stop"][0]["command"]
+        post = data["openjarvis"]["PostToolUse"][0]["hooks"][0]["command"]
+        assert "X-OpenJarvis-Hook: Stop" in stop
+        assert "X-OpenJarvis-Hook: PostToolUse" in post
+        assert "X-OpenJarvis-CLI: antigravity" in stop
+
+    def test_antigravity_hooks_file_leaves_broken_json(self, tmp_path: Path) -> None:
+        g = tmp_path / "hooks.json"
+        g.write_text("{not json")
+        with patch.object(sc, "_ANTIGRAVITY_GLOBAL_HOOKS_FILE", g):
+            sc.antigravity_hooks_file()
+        assert g.read_text() == "{not json"
 
     def test_names_do_not_collide(self) -> None:
         p = Path("/x/AI/openjarvis/repo")
@@ -497,3 +517,24 @@ class TestTranscriptSelection:
         (self.folder / "33333333-3333-3333-3333-333333333333.jsonl").write_text("{}\n")
         with patch.object(sc, "claude_session_id", return_value=""):
             assert watcher._transcript_for("jarvis-openjarvis", "/x/openjarvis") is None
+
+    def test_hook_transcript_stays_with_its_cli(self, tmp_path: Path) -> None:
+        agy = tmp_path / "transcript.jsonl"
+        agy.write_text("{}\n")
+        watcher.remember_transcript("/x/openjarvis", str(agy), "antigravity")
+        with patch.object(sc, "claude_session_id", return_value=""):
+            assert watcher._transcript_for("jarvis-openjarvis", "/x/openjarvis") is None
+            assert (
+                watcher._transcript_for("jarvis-openjarvis-agy", "/x/openjarvis") == agy
+            )
+
+    def test_antigravity_transcript_from_conversation_id(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(watcher, "_AGY_BRAIN_DIR", tmp_path)
+        logs = tmp_path / "abc" / ".system_generated" / "logs"
+        logs.mkdir(parents=True)
+        (logs / "transcript.jsonl").write_text("{}\n")
+        assert watcher.antigravity_transcript("abc") == str(logs / "transcript.jsonl")
+        assert watcher.antigravity_transcript("missing") == ""
+        assert watcher.antigravity_transcript("../abc") == ""

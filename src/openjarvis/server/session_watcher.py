@@ -10,6 +10,8 @@ For every live ``jarvis-*`` Claude tmux session the watcher:
   user's own, in the same folder) write there too;
 * checks the terminal screen: Claude shows "esc to interrupt" only while
   it is working, and its spinner line carries the elapsed time.
+  Antigravity (``agy``) sessions instead count as working while their
+  transcript — reported by the PostToolUse/Stop hooks — keeps growing.
 
 While a session works it yields one progress event per interval: the
 actions since the last update, or — during long thinking with no tool
@@ -30,6 +32,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 _WORKING_MARK = "esc to interrupt"
+# Antigravity has no reliable on-screen busy marker ("Esc to cancel" also
+# labels its dialogs), so it counts as working while its transcript keeps
+# growing: this long without a new entry means it stopped.
+_AGY_IDLE_S = 90.0
+_AGY_BRAIN_DIR = Path.home() / ".gemini" / "antigravity-cli" / "brain"
 _FIRST_PROGRESS_S = 20.0
 _HEARTBEAT_FACTOR = 3  # heartbeats are this many intervals apart
 _SCAN_EVERY_S = 4.0
@@ -41,8 +48,22 @@ _transcripts: Dict[str, str] = {}
 _last_scan = 0.0
 
 
+def _decode_args(args: Dict[str, Any]) -> Dict[str, Any]:
+    """Antigravity stores each argument JSON-encoded (``"\\"pytest\\""``)."""
+    out = {}
+    for key, value in args.items():
+        if isinstance(value, str) and len(value) >= 2 and value[0] == value[-1] == '"':
+            try:
+                value = json.loads(value)
+            except ValueError:
+                pass
+        out[key] = value
+    return out
+
+
 def describe_action(tool: str, args: Dict[str, Any]) -> tuple[str, str]:
     """``(category, detail)`` for one tool call, used to build a summary."""
+    args = _decode_args(args)
     path = (
         args.get("file_path")
         or args.get("notebook_path")
@@ -58,6 +79,7 @@ def describe_action(tool: str, args: Dict[str, Any]) -> tuple[str, str]:
     if tool in ("Edit", "Write", "MultiEdit", "NotebookEdit") or t_lower in (
         "write_to_file",
         "replace_file_content",
+        "multi_replace_file_content",
         "edit",
         "write",
     ):
@@ -74,6 +96,9 @@ def describe_action(tool: str, args: Dict[str, Any]) -> tuple[str, str]:
         "grep",
         "glob",
         "list_directory",
+        "list_dir",
+        "grep_search",
+        "find_by_name",
     ):
         return "read", name
     if tool in ("WebFetch", "WebSearch") or t_lower in (
@@ -90,10 +115,7 @@ def describe_action(tool: str, args: Dict[str, Any]) -> tuple[str, str]:
         "subagent",
     ):
         desc = str(
-            args.get("description")
-            or args.get("toolSummary")
-            or args.get("Role")
-            or ""
+            args.get("description") or args.get("toolSummary") or args.get("Role") or ""
         )
         return "agent", desc[:60]
     return "other", tool
@@ -153,24 +175,31 @@ def _spoken_duration(seconds: float) -> str:
     return f"{hours} h {rest} min"
 
 
-def remember_transcript(cwd: str, transcript_path: str) -> None:
-    """Called for every hook: hooks only come from JARVIS-started sessions."""
+def antigravity_transcript(conversation_id: str) -> str:
+    """Where ``agy`` logs a conversation ("" when it doesn't exist)."""
+    if not conversation_id or "/" in conversation_id:
+        return ""
+    path = (
+        _AGY_BRAIN_DIR
+        / conversation_id
+        / ".system_generated"
+        / "logs"
+        / "transcript.jsonl"
+    )
+    return str(path) if path.exists() else ""
+
+
+def remember_transcript(cwd: str, transcript_path: str, cli: str = "claude") -> None:
+    """Called for every hook: hooks only come from JARVIS-started sessions.
+
+    Only the session of the hook's own ``cli`` is updated, so Claude and
+    Antigravity running in the same project never share a transcript.
+    """
     if not cwd or not transcript_path:
         return
     from openjarvis.tools import session_control as sc
 
-    matched = False
-    try:
-        resolved_cwd = str(Path(cwd).resolve())
-        for sname, sdir in sc.list_sessions():
-            if sdir and str(Path(sdir).resolve()) == resolved_cwd:
-                _transcripts[sname] = transcript_path
-                matched = True
-    except Exception:
-        pass
-    if not matched:
-        _transcripts[sc.session_name(Path(cwd))] = transcript_path
-        _transcripts[sc.session_name(Path(cwd), "antigravity")] = transcript_path
+    _transcripts[sc.session_name(Path(cwd), cli)] = transcript_path
 
 
 def _transcript_for(name: str, launch_dir: str) -> Optional[Path]:
@@ -185,13 +214,6 @@ def _transcript_for(name: str, launch_dir: str) -> Optional[Path]:
         path = cs.CLAUDE_DIR / cs._claude_slug(launch_dir) / f"{sid}.jsonl"
         if path.exists():
             return path
-    if sc.session_cli(name) == "antigravity" and launch_dir:
-        for candidate in (
-            Path(launch_dir) / ".gemini" / "antigravity" / "transcript.jsonl",
-            Path(launch_dir) / ".gemini" / "antigravity-cli" / "transcript.jsonl",
-        ):
-            if candidate.exists():
-                return candidate
     return None
 
 
@@ -248,23 +270,10 @@ def read_new_actions(st: Dict[str, Any], path: Path) -> List[Tuple[str, str]]:
     return actions
 
 
-def _is_working(
-    screen: str, actions: List[Tuple[str, str]], cli: str = "claude"
-) -> bool:
-    s = screen.lower()
+def _is_working(st: Dict[str, Any], screen: str, now: float, cli: str) -> bool:
     if cli == "antigravity":
-        if bool(actions):
-            return True
-        return any(
-            mark in s
-            for mark in (
-                "esc to interrupt",
-                "esc to cancel",
-                "thinking",
-                "generating",
-            )
-        )
-    return _WORKING_MARK in s
+        return now - st.get("last_activity", 0.0) < _AGY_IDLE_S
+    return _WORKING_MARK in screen
 
 
 def _progress_event(
@@ -295,7 +304,9 @@ def step(
 ) -> Optional[Dict[str, Any]]:
     """Advance one session's state; return a progress event when due."""
     st = _state.setdefault(name, {})
-    if not _is_working(screen, actions, cli=cli):
+    if actions:
+        st["last_activity"] = now
+    if not _is_working(st, screen, now, cli):
         st.update(working_since=None, actions=[], last_emit=0.0)
         return None
     if not st.get("working_since"):
@@ -341,7 +352,11 @@ def scan(now: Optional[float] = None, interval: float = 60.0) -> List[Dict[str, 
         live.add(name)
         st = _state.setdefault(name, {})
         transcript = _transcript_for(name, launch_dir)
+        seen = st.get("path") == str(transcript) and "offset" in st
+        before = st.get("offset")
         actions = read_new_actions(st, transcript) if transcript else []
+        if transcript and seen and st.get("offset") != before:
+            st["last_activity"] = now  # new entries, even without tool calls
         screen = sc.capture_screen(name, lines=15)
         project = sc.project_label(Path(launch_dir)) if launch_dir else name
         event = step(name, project, screen, actions, now, interval, cli=cli)

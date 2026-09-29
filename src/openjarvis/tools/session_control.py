@@ -16,7 +16,9 @@ Guard rails — JARVIS also reads untrusted text (emails, web pages):
 Claude sessions also get Stop / Notification hooks (via ``--settings``,
 leaving the user's global settings untouched) that POST to the JARVIS
 server so it can announce progress, "Claude terminó" or "Claude pide
-permiso".
+permiso".  Antigravity has no per-session settings, so its Stop /
+PostToolUse hooks live in an ``openjarvis`` group of agy's global
+hooks.json and the server filters them to ``jarvis-*-agy`` sessions.
 """
 
 from __future__ import annotations
@@ -251,67 +253,48 @@ def hooks_settings_file() -> Path:
     return _HOOKS_FILE
 
 
-def antigravity_hooks_file(project: Optional[Path] = None) -> Path:
-    """Ensure Stop and PostToolUse lifecycle hooks are configured for Antigravity (agy).
-
-    Writes hooks to ~/.gemini/config/hooks.json so agy forwards tool
-    execution and session termination to the JARVIS server. If project
-    is provided, also configures <project>/.agents/hooks.json.
-    """
-    post = (
+def _agy_post(event: str) -> str:
+    """Hook command forwarding an agy payload, tagged with its event name."""
+    return (
         "curl -s -m 3 -X POST -H 'Content-Type: application/json' "
+        f"-H 'X-OpenJarvis-CLI: antigravity' -H 'X-OpenJarvis-Hook: {event}' "
         f"--data-binary @- {_EVENTS_URL} >/dev/null 2>&1 || true; echo '{{}}'"
     )
-    stop_cfg = [
-        {
-            "type": "command",
-            "command": post,
-        }
-    ]
-    post_tool_cfg = [
-        {
-            "matcher": "*",
-            "hooks": [
-                {
-                    "type": "command",
-                    "command": post,
-                }
-            ],
-        }
-    ]
+
+
+def antigravity_hooks_file() -> Path:
+    """Ensure the ``openjarvis`` hook group in agy's global hooks.json.
+
+    agy has no per-session ``--settings``, so the Stop (turn end) and
+    PostToolUse (reports the transcript to follow) hooks go in
+    ``~/.gemini/config/hooks.json`` and fire for every agy run; the server
+    drops events that don't come from a live ``jarvis-*-agy`` session.
+    Other hook groups in the file are kept; an unreadable file is left
+    alone rather than overwritten.
+    """
+    group = {
+        "Stop": [{"type": "command", "command": _agy_post("Stop")}],
+        "PostToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": _agy_post("PostToolUse")}],
+            }
+        ],
+    }
+    path = _ANTIGRAVITY_GLOBAL_HOOKS_FILE
     try:
-        _ANTIGRAVITY_GLOBAL_HOOKS_FILE.parent.mkdir(parents=True, exist_ok=True)
         existing: Dict[str, Any] = {}
-        if _ANTIGRAVITY_GLOBAL_HOOKS_FILE.exists():
-            try:
-                existing = json.loads(_ANTIGRAVITY_GLOBAL_HOOKS_FILE.read_text())
-            except Exception:
-                existing = {}
-        target = existing.setdefault("openjarvis", {})
-        target["Stop"] = stop_cfg
-        target["PostToolUse"] = post_tool_cfg
-        _ANTIGRAVITY_GLOBAL_HOOKS_FILE.write_text(json.dumps(existing, indent=2))
-    except OSError:
+        if path.exists():
+            existing = json.loads(path.read_text())
+            if not isinstance(existing, dict):
+                return path
+        if existing.get("openjarvis") != group:
+            existing["openjarvis"] = group
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(existing, indent=2))
+    except (OSError, ValueError):
         pass
-
-    if project:
-        proj_file = project / ".agents" / "hooks.json"
-        try:
-            proj_file.parent.mkdir(parents=True, exist_ok=True)
-            proj_existing: Dict[str, Any] = {}
-            if proj_file.exists():
-                try:
-                    proj_existing = json.loads(proj_file.read_text())
-                except Exception:
-                    proj_existing = {}
-            target_proj = proj_existing.setdefault("openjarvis", {})
-            target_proj["Stop"] = stop_cfg
-            target_proj["PostToolUse"] = post_tool_cfg
-            proj_file.write_text(json.dumps(proj_existing, indent=2))
-        except OSError:
-            pass
-
-    return _ANTIGRAVITY_GLOBAL_HOOKS_FILE
+    return path
 
 
 # ── Tool ────────────────────────────────────────────────────────────────

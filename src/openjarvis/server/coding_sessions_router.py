@@ -172,29 +172,70 @@ def _progress_interval() -> float:
     return value
 
 
-def event_from_hook(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Turn a Claude Code or Antigravity hook payload into an announcement, or None to skip."""
-    is_antigravity = bool(
-        payload.get("conversationId")
-        or payload.get("transcriptPath")
-        or payload.get("terminationReason")
-        or "antigravity" in str(payload.get("cli") or "").lower()
-        or "antigravity" in str(payload.get("transcript_path") or "").lower()
+def _hook_cli(payload: Dict[str, Any]) -> str:
+    """ "antigravity" for ``agy`` hook payloads (camelCase keys), else "claude"."""
+    agy_keys = (
+        "conversationId",
+        "transcriptPath",
+        "terminationReason",
+        "workspacePaths",
     )
-    cli_label = "Antigravity" if is_antigravity else "Claude"
-    cli = "antigravity" if is_antigravity else "claude"
+    return "antigravity" if any(k in payload for k in agy_keys) else "claude"
 
-    kind = str(payload.get("hook_event_name") or "")
+
+def _hook_kind(payload: Dict[str, Any], declared: str = "") -> str:
+    """Hook event name: the one the hook command declared, else the payload's."""
+    kind = declared or str(payload.get("hook_event_name") or "")
     if not kind and payload.get("terminationReason"):
         kind = "Stop"
+    return kind
 
+
+def _hook_cwd(payload: Dict[str, Any]) -> str:
     cwd = str(payload.get("cwd") or "")
-    if not cwd and payload.get("workspacePaths"):
-        paths = payload["workspacePaths"]
-        cwd = str(paths[0]) if isinstance(paths, list) and paths else ""
-    if ".openjarvis" in cwd:
-        return None  # internal engine call (e.g. AntigravityCLIEngine), not a coding session
-    project = _project(cwd)
+    paths = payload.get("workspacePaths")
+    if not cwd and isinstance(paths, list) and paths:
+        cwd = str(paths[0])
+    return cwd.removeprefix("file://")
+
+
+def _hook_transcript(payload: Dict[str, Any]) -> str:
+    path = str(payload.get("transcript_path") or payload.get("transcriptPath") or "")
+    if not path and payload.get("conversationId"):
+        path = session_watcher.antigravity_transcript(str(payload["conversationId"]))
+    return path
+
+
+def _is_jarvis_agy_session(cwd: str) -> bool:
+    """Whether ``cwd`` belongs to a live ``jarvis-*-agy`` tmux session.
+
+    The agy hooks live in its global config, so they fire for every
+    Antigravity run — the user's own and the server's AntigravityCLIEngine
+    calls too.  Only sessions JARVIS started are announced.
+    """
+    if not cwd:
+        return False
+    from openjarvis.tools import session_control as sc
+
+    return sc.session_name(Path(cwd), "antigravity") in {
+        name for name, _ in sc.list_sessions()
+    }
+
+
+def event_from_hook(
+    payload: Dict[str, Any], hook: str = "", cli: str = ""
+) -> Optional[Dict[str, Any]]:
+    """Turn a Claude Code / Antigravity hook payload into an announcement.
+
+    ``hook`` / ``cli`` are what the hook command declared in its
+    ``X-OpenJarvis-Hook`` / ``X-OpenJarvis-CLI`` headers (the agy hooks
+    do); without them both are inferred from the payload.  Returns None
+    when there is nothing to announce.
+    """
+    cli = cli or _hook_cli(payload)
+    cli_label = "Antigravity" if cli == "antigravity" else "Claude"
+    kind = _hook_kind(payload, hook)
+    project = _project(_hook_cwd(payload))
 
     message = str(payload.get("message") or "")[:300]
     if kind == "Stop":
@@ -213,9 +254,7 @@ def event_from_hook(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     session_id = str(payload.get("session_id") or payload.get("conversationId") or "")
-    transcript_path = str(
-        payload.get("transcript_path") or payload.get("transcriptPath") or ""
-    )
+    transcript_path = _hook_transcript(payload)
 
     return {
         "kind": kind.lower(),
@@ -246,17 +285,15 @@ async def post_event(request: Request) -> Dict[str, Any]:
         return {"accepted": False}
     if not isinstance(payload, dict):
         return {"accepted": False}
-    # PostToolUse came from sessions started by an earlier build; progress
-    # is now derived by session_watcher, so ignore it to avoid duplicates.
-    cwd = str(payload.get("cwd") or "")
-    if not cwd and payload.get("workspacePaths"):
-        paths = payload["workspacePaths"]
-        cwd = str(paths[0]) if isinstance(paths, list) and paths else ""
-    transcript_path = str(
-        payload.get("transcript_path") or payload.get("transcriptPath") or ""
-    )
-    session_watcher.remember_transcript(cwd, transcript_path)
-    event = event_from_hook(payload)
+    hook = request.headers.get("x-openjarvis-hook", "")
+    cli = request.headers.get("x-openjarvis-cli", "") or _hook_cli(payload)
+    cwd = _hook_cwd(payload)
+    if cli == "antigravity" and not _is_jarvis_agy_session(cwd):
+        return {"accepted": True, "id": None}
+    # PostToolUse only teaches session_watcher the transcript (agy hooks send
+    # it; Claude's came from an earlier build) — progress is derived there.
+    session_watcher.remember_transcript(cwd, _hook_transcript(payload), cli)
+    event = event_from_hook(payload, hook, cli)
     if event is None:
         return {"accepted": True, "id": None}
     _ensure_summarizer(request.app.state)

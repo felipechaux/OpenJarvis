@@ -519,7 +519,7 @@ class StartCodingSessionTool(BaseTool):
                 "default; use cli='antigravity' ONLY when the user explicitly asks "
                 "for Antigravity, agy or Gemini (Google's agent). Optionally give "
                 "the assistant a first task. The session keeps its normal "
-                "permission prompts unless dangerously_skip_permissions is enabled. "
+                "permission prompts unless the user's config disables them. "
                 "Pair with open_app to also open the project in an editor such as "
                 "Antigravity, and use coding_sessions afterwards to check on its "
                 "progress."
@@ -540,13 +540,6 @@ class StartCodingSessionTool(BaseTool):
                         "type": "string",
                         "description": "Optional first instruction the user gave.",
                     },
-                    "dangerously_skip_permissions": {
-                        "type": "boolean",
-                        "description": (
-                            "Bypass tool permission prompts. Default comes from "
-                            "[tools.launcher] dangerously_skip_permissions (false)."
-                        ),
-                    },
                 },
                 "required": ["project"],
             },
@@ -565,12 +558,9 @@ class StartCodingSessionTool(BaseTool):
         if err is not None:
             return err
 
-        skip_perms = params.get("dangerously_skip_permissions")
-        if skip_perms is None:
-            raw = getattr(cfg, "dangerously_skip_permissions", False)
-            skip_perms = raw if isinstance(raw, bool) else False
-        else:
-            skip_perms = bool(skip_perms)
+        # Config only, never a tool argument: JARVIS also reads untrusted
+        # text, which must not be able to start a session without prompts.
+        skip_perms = getattr(cfg, "dangerously_skip_permissions", False) is True
 
         task = str(params.get("task") or "").strip()
         terminal = cfg.terminal or "Terminal"
@@ -599,13 +589,11 @@ class StartCodingSessionTool(BaseTool):
                             "tmux": tmux_name,
                         },
                     )
+                settings = ""
                 if cli == "claude":
                     settings = str(sc.hooks_settings_file())
                 elif cli == "antigravity":
-                    sc.antigravity_hooks_file(project)
-                    settings = ""
-                else:
-                    settings = ""
+                    sc.antigravity_hooks_file()
                 command = build_assistant_command(
                     cli,
                     project,
@@ -617,8 +605,7 @@ class StartCodingSessionTool(BaseTool):
                 sc.new_session(tmux_name, project, command)
                 _run_in_terminal(terminal, sc.attach_command(tmux_name))
             else:
-                if cli == "antigravity":
-                    sc.antigravity_hooks_file(project)
+                # Hooks only reach sessions JARVIS runs in tmux.
                 _run_in_terminal(
                     terminal,
                     build_session_command(
@@ -627,7 +614,7 @@ class StartCodingSessionTool(BaseTool):
                         task,
                         session_id,
                         dangerously_skip_permissions=skip_perms,
-                    ),
+                        ),
                 )
         except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
             detail = getattr(exc, "stderr", b"") or b""
