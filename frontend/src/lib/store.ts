@@ -141,6 +141,9 @@ interface AppState {
   models: ModelInfo[];
   modelsLoading: boolean;
   selectedModel: string;
+  /** Model that actually answered the last turn ('' before any turn).
+   *  Tiered routing can answer an Opus selection with Haiku. */
+  activeModel: string;
   serverInfo: ServerInfo | null;
   savings: SavingsData | null;
 
@@ -187,6 +190,7 @@ interface AppState {
   setModels: (models: ModelInfo[]) => void;
   setModelsLoading: (loading: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setActiveModel: (model: string) => void;
   setServerInfo: (info: ServerInfo | null) => void;
   setSavings: (data: SavingsData | null) => void;
 
@@ -272,6 +276,7 @@ export const useAppStore = create<AppState>((set, get) => {
     models: [],
     modelsLoading: true,
     selectedModel: localStorage.getItem(SELECTED_MODEL_KEY) || '',
+    activeModel: '',
     serverInfo: null,
     savings: null,
 
@@ -458,6 +463,7 @@ export const useAppStore = create<AppState>((set, get) => {
       } catch { /* ignore quota errors */ }
       set({ selectedModel: model });
     },
+    setActiveModel: (model: string) => set({ activeModel: model }),
     setServerInfo: (info: ServerInfo | null) => set({ serverInfo: info }),
     setSavings: (data: SavingsData | null) => set({ savings: data }),
 

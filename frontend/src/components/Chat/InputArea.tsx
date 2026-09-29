@@ -205,6 +205,9 @@ export function InputArea() {
     let usage: TokenUsage | undefined;
     let complexity: { score: number; tier: string; suggested_max_tokens: number } | undefined;
     const toolCalls: ToolCallInfo[] = [];
+    // Models that actually answered (tiered routing may pick Haiku for an
+    // Opus selection, or escalate mid-turn); read from inference_end.
+    const modelsUsed: string[] = [];
     let lastFlush = 0;
     let ttftMs: number | undefined;
 
@@ -237,6 +240,14 @@ export function InputArea() {
             timestamp: Date.now(), level: 'info', category: 'chat',
             message: `Generating with ${selectedModel}...`,
           });
+        } else if (eventName === 'inference_end') {
+          try {
+            const model = JSON.parse(sseEvent.data)?.model;
+            if (typeof model === 'string' && model && modelsUsed[modelsUsed.length - 1] !== model) {
+              modelsUsed.push(model);
+              useAppStore.getState().setActiveModel(model);
+            }
+          } catch {}
         } else if (eventName === 'tool_call_start') {
           try {
             const data = JSON.parse(sseEvent.data);
@@ -338,10 +349,20 @@ export function InputArea() {
       }
       const totalMs = Date.now() - startTime;
       const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'MiniMax-', 'chatgpt-', 'antigravity/'];
-      const engineLabel = _CLOUD_PREFIXES.some(p => selectedModel.startsWith(p)) ? 'cloud' : 'ollama';
+      // No inference but a tool ran: a fast path answered without a model.
+      const modelLabel = modelsUsed.length
+        ? modelsUsed.join(' → ')
+        : toolCalls.length
+          ? 'atajo (sin modelo)'
+          : selectedModel;
+      if (!modelsUsed.length && toolCalls.length) {
+        useAppStore.getState().setActiveModel(modelLabel);
+      }
+      const answeredBy = modelsUsed[modelsUsed.length - 1] || selectedModel;
+      const engineLabel = _CLOUD_PREFIXES.some(p => answeredBy.startsWith(p)) ? 'cloud' : 'ollama';
       const telemetry: MessageTelemetry = {
         engine: engineLabel,
-        model_id: selectedModel,
+        model_id: modelLabel,
         total_ms: totalMs,
         ttft_ms: ttftMs,
         tokens_per_sec: usage?.completion_tokens

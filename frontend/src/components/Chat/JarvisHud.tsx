@@ -78,7 +78,9 @@ function HudScreen({ onDismiss }: { onDismiss: () => void }) {
   const { w, h } = useViewport();
   const now = useClock();
   const caption = useAppStore((s) => s.ttsCaption);
-  const model = useAppStore((s) => s.selectedModel);
+  // The model that actually answered (routing may swap Opus for Haiku);
+  // the selection only until the first turn.
+  const model = useAppStore((s) => s.activeModel || s.selectedModel);
   const language = useAppStore((s) => s.settings.language);
 
   const rootRef = useRef<HTMLDivElement>(null);
