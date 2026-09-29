@@ -176,4 +176,9 @@ try:
 except ImportError:
     pass
 
+try:
+    import openjarvis.tools.knowledge_graph_view  # noqa: F401
+except ImportError:
+    pass
+
 __all__ = ["BaseTool", "ToolExecutor", "ToolSpec"]

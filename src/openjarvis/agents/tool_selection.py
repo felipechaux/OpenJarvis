@@ -32,6 +32,8 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"nota|notes?|correo|e-?mail|mail|mensaje|calendario|reuni[oó]n"
             r"|evento|contacto|escrib[ií]|guard[eé]|busca|encuentra|recuerd"
             r"|search|find|what did i"
+            r"|hablamos|hablaste|charlamos|conversamos|dijimos|dije|platicamos"
+            r"|conversaci[oó]n|chat|talked"
         ),
         "open_app": r"abr[eai]|abrir|open|lanza|inicia|app|aplicaci[oó]n",
         "open_url": (
@@ -49,11 +51,14 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
         "apple_notes": r"nota|notes?|apunt|anota|apple",
         "user_profile_manage": (
             r"perfil|profile|sobre m[ií]|about me|mi trabajo|mis datos"
-            r"|actualiza|update"
+            r"|actualiza|update|recuerd|anota|apunta|guarda|olvid"
+            r"|modific|cambi|corrig|nodo|grafo|graph|remember|forget"
         ),
         "memory_manage": (
             r"recuerd|memoriz|olvid|remember|forget|memoria|memory"
+            r"|nodo|grafo|graph|anota|guarda"
         ),
+        "show_knowledge_graph": r"grafo|graph|obsidian|conocimiento|knowledge",
         "get_weather": (
             r"clima|el tiempo|temperatura|llov|lluvia|pron[oó]stico|weather"
             r"|forecast|fr[ií]o|calor|paraguas"

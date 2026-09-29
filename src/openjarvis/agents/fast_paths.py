@@ -162,6 +162,33 @@ def _match_open_app(text: str) -> Optional[FastPath]:
     return FastPath("open_app", {"app": app}, _open_app_reply)
 
 
+# ── show_knowledge_graph ───────────────────────────────────────────────────
+
+# "abre Obsidian", "muéstrame mi grafo (de conocimiento)", "abre el grafo".
+# Obsidian is matched here, before open_app: its only vault is this graph.
+_KNOWLEDGE_GRAPH_RE = re.compile(
+    r"^(?:(?:abre|abrir|[aá]breme|lanza|open)\s+obsidian"
+    r"|(?:mu[eé]strame|mu[eé]stranos|ens[eé][ñn]ame|abre|abrir|[aá]breme|ver|show)"
+    r"\s+(?:mi|el|nuestro|my|the)\s+(?:grafo|graph)"
+    r"(?:\s+(?:de\s+conocimiento|knowledge))?(?:\s+en\s+obsidian)?)$",
+    re.IGNORECASE,
+)
+
+
+def _knowledge_graph_reply(result: ToolResult) -> Optional[str]:
+    if not result.success:
+        return None
+    nodes = (result.metadata or {}).get("nodes")
+    what = f" con {nodes} nodos" if nodes else ""
+    return f"Su grafo de conocimiento está abierto en Obsidian{what}, señor."
+
+
+def _match_knowledge_graph(text: str) -> Optional[FastPath]:
+    if not _KNOWLEDGE_GRAPH_RE.match(text):
+        return None
+    return FastPath("show_knowledge_graph", {}, _knowledge_graph_reply)
+
+
 # ── get_weather ────────────────────────────────────────────────────────────
 
 _WEATHER_RE = re.compile(
@@ -220,7 +247,7 @@ def _match_weather(text: str) -> Optional[FastPath]:
     )
 
 
-_MATCHERS = (_match_spotify, _match_weather, _match_open_app)
+_MATCHERS = (_match_spotify, _match_weather, _match_knowledge_graph, _match_open_app)
 
 
 def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
