@@ -10,6 +10,7 @@ import logging
 import re
 from typing import Any, List, Optional
 
+from openjarvis.agents import session_guard
 from openjarvis.agents._stubs import AgentContext, AgentResult, ToolUsingAgent
 from openjarvis.agents.prompt_loader import (
     load_few_shot_exemplars,
@@ -504,7 +505,27 @@ class NativeReActAgent(ToolUsingAgent):
         logger.info(
             "native_react: %s escalated to %s", self._model, self._escalation_model
         )
-        self._model = self._escalation_model
+        self._switch_model(messages, input, context, self._escalation_model)
+
+    def _fallback_model(self) -> str:
+        """The configured backup model, or "" when there is none to try."""
+        try:
+            from openjarvis.core.config import load_config
+            fallback = load_config().intelligence.fallback_model
+        except Exception:
+            return ""
+        return fallback if fallback and fallback != self._model else ""
+
+    def _switch_model(
+        self,
+        messages: list[Message],
+        input: str,
+        context: Optional[AgentContext],
+        model: str,
+    ) -> None:
+        """Continue the turn on *model*, with the system prompt rebuilt for it."""
+        self._model = model
+        self._escalation_model = ""
         system_prompt = self._compose_system_prompt(
             input, context, allow_escalation=False
         )
@@ -525,6 +546,8 @@ class NativeReActAgent(ToolUsingAgent):
         if fast is not None:
             return fast
 
+        self._reset_loop_guard()
+
         system_prompt = self._compose_system_prompt(
             input, context, allow_escalation=self._can_escalate()
         )
@@ -543,6 +566,10 @@ class NativeReActAgent(ToolUsingAgent):
 
         all_tool_results: list[ToolResult] = []
         turns = 0
+        fallback_used = False
+        # Session guard: once third-party text is in play, this turn may not
+        # steer a coding session (see agents/session_guard.py).
+        tainted = session_guard.has_injected_context(messages)
         total_usage: dict[str, int] = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -555,7 +582,22 @@ class NativeReActAgent(ToolUsingAgent):
             if self._loop_guard:
                 messages = self._loop_guard.compress_context(messages)
 
-            result = self._generate(messages)
+            try:
+                result = self._generate(messages)
+            except Exception as exc:
+                # The primary provider is down or out of quota: finish the
+                # turn on the backup model (another provider) rather than
+                # failing it.  Only once per turn.
+                fallback = "" if fallback_used else self._fallback_model()
+                if not fallback:
+                    raise
+                logger.warning(
+                    "native_react: %s failed (%s); falling back to %s",
+                    self._model, str(exc)[:200], fallback,
+                )
+                fallback_used = True
+                self._switch_model(messages, input, context, fallback)
+                continue
             usage = result.get("usage", {})
             for k in total_usage:
                 total_usage[k] += usage.get(k, 0)
@@ -623,7 +665,16 @@ class NativeReActAgent(ToolUsingAgent):
                     messages.append(Message(role=Role.USER, content=observation))
                     continue
 
-            tool_result = self._executor.execute(tool_call)
+            tool_result = session_guard.check(tool_call, tainted)
+            if tool_result is not None:
+                logger.warning(
+                    "native_react: session guard blocked %s(%s)",
+                    tool_call.name, tool_call.arguments[:200],
+                )
+            else:
+                tool_result = self._executor.execute(tool_call)
+                if session_guard.taints(tool_call.name):
+                    tainted = True
             all_tool_results.append(tool_result)
 
             observation = f"Observation: {tool_result.content}"

@@ -393,18 +393,14 @@ def _handle_agent(
     # Last message is the input
     input_text = req.messages[-1].content if req.messages else ""
 
-    # Override agent model for this request if the caller specified one
-    original_model = agent._model
-    if model:
-        agent._model = model
-    agent._escalation_model = escalation_model
-    try:
-        result = agent.run(input_text, context=ctx)
-        # The agent may have escalated to a stronger model mid-turn.
-        model = agent._model or model
-    finally:
-        agent._model = original_model
-        agent._escalation_model = ""
+    # Per-request copy: the shared agent is never mutated, so concurrent
+    # requests cannot swap each other's model.
+    agent = agent.for_request(model, escalation_model=escalation_model)
+    result = agent.run(input_text, context=ctx)
+    # The agent may have escalated or fallen back to another model mid-turn.
+    answered_by = getattr(agent, "_model", "")
+    if isinstance(answered_by, str) and answered_by:
+        model = answered_by
 
     usage = UsageInfo(
         prompt_tokens=result.metadata.get("prompt_tokens", 0),

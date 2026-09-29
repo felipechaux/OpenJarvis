@@ -135,16 +135,12 @@ class AgentStreamBridge:
             self._request.messages[-1].content if self._request.messages else ""
         )
 
-        # Override agent model for this request if the caller specified one
-        original_model = self._agent._model
-        if self._model:
-            self._agent._model = self._model
-        self._agent._escalation_model = self._escalation_model
-        try:
-            return self._agent.run(input_text, context=ctx)
-        finally:
-            self._agent._model = original_model
-            self._agent._escalation_model = ""
+        # Per-request copy: the shared agent is never mutated, so concurrent
+        # requests cannot swap each other's model.
+        agent = self._agent.for_request(
+            self._model, escalation_model=self._escalation_model
+        )
+        return agent.run(input_text, context=ctx)
 
     # ------------------------------------------------------------------
     # Public streaming interface

@@ -51,6 +51,8 @@ def _make_agent(content="Hello from agent"):
     agent = MagicMock()
     agent.agent_id = "mock"
     agent.run.return_value = AgentResult(content=content, turns=1)
+    # Routes run each request on a per-request copy of the agent.
+    agent.for_request.return_value = agent
     return agent
 
 

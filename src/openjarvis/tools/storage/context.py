@@ -44,16 +44,21 @@ def format_context(results: List[RetrievalResult]) -> str:
     return "\n\n".join(lines)
 
 
+# Opening of the injected context message; the session guard recognises
+# retrieved (third-party) text by it.
+CONTEXT_PREFIX = (
+    "The following context was retrieved from the knowledge"
+    " base. Use it to inform your response, citing sources"
+    " where applicable:"
+)
+
+
 def build_context_message(
     results: List[RetrievalResult],
 ) -> Message:
     """Create a system message with formatted context."""
     context_text = format_context(results)
-    content = (
-        "The following context was retrieved from the knowledge"
-        " base. Use it to inform your response, citing sources"
-        " where applicable:\n\n" + context_text
-    )
+    content = CONTEXT_PREFIX + "\n\n" + context_text
     return Message(role=Role.SYSTEM, content=content)
 
 

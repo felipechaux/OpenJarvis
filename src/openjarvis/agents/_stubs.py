@@ -8,6 +8,7 @@ base for agents that accept tools.
 
 from __future__ import annotations
 
+import copy
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -105,6 +106,21 @@ class BaseAgent(ABC):
     # ------------------------------------------------------------------
     # Concrete helpers
     # ------------------------------------------------------------------
+
+    def for_request(self, model: str = "", **overrides: Any) -> "BaseAgent":
+        """A per-request copy of this agent.
+
+        The server keeps one agent instance and runs requests concurrently in
+        threads, so per-request settings (model, escalation target) must not
+        be written onto the shared instance.  The copy shares the engine and
+        tools; *overrides* set ``_<name>`` attributes on the copy only.
+        """
+        clone = copy.copy(self)
+        if model:
+            clone._model = model
+        for name, value in overrides.items():
+            setattr(clone, f"_{name}", value)
+        return clone
 
     def _emit_turn_start(self, input: str) -> None:
         """Publish ``AGENT_TURN_START`` if an event bus is available."""
@@ -353,6 +369,21 @@ class ToolUsingAgent(BaseAgent):
                 self._loop_guard = LoopGuard(loop_guard_config, bus=bus)
         except ImportError:
             pass
+
+    def for_request(self, model: str = "", **overrides: Any) -> "ToolUsingAgent":
+        clone = super().for_request(model, **overrides)
+        clone._reset_loop_guard()
+        return clone
+
+    def _reset_loop_guard(self) -> None:
+        """Start a fresh loop guard.
+
+        Its counters are meant for one turn; a guard kept for the life of
+        the server blocks every tool after a handful of uses in total.
+        """
+        guard = self._loop_guard
+        if guard is not None:
+            self._loop_guard = type(guard)(guard._config, bus=guard._bus)
 
 
 __all__ = ["AgentContext", "AgentResult", "BaseAgent", "ToolUsingAgent"]
