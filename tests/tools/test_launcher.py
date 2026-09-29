@@ -352,6 +352,13 @@ class TestSessionCommand:
             cmd = build_session_command("claude", tmp_path / "p", "hola mundo", "abc")
         assert cmd.endswith("claude --session-id abc --name 'jarvis: p' 'hola mundo'")
 
+    def test_claude_model_flag(self, tmp_path: Path) -> None:
+        with patch("openjarvis.tools.launcher._claude_binary", return_value="claude"):
+            cmd = build_session_command(
+                "claude", tmp_path / "p", "hola", "abc", model="opus"
+            )
+        assert cmd.endswith("--name 'jarvis: p' --model opus hola")
+
     def test_claude_dangerously_skip_permissions(self, tmp_path: Path) -> None:
         with patch("openjarvis.tools.launcher._claude_binary", return_value="claude"):
             cmd = build_session_command(

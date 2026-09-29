@@ -84,6 +84,37 @@ def _build_system_prompt(config=None) -> str:
     return "\n\n".join(sections)
 
 
+def _apply_history_window(request_body, config, engine) -> None:
+    """Replace ``request_body.messages`` with its windowed version."""
+    from openjarvis.server.history import engine_summarizer, window_history
+    from openjarvis.server.models import ChatMessage
+
+    try:
+        messages = _to_messages(request_body.messages)
+        fast_model = config.intelligence.fast_model
+        summarize = engine_summarizer(engine, fast_model) if fast_model else None
+        windowed = window_history(
+            messages, keep=config.agent.history_window, summarize=summarize
+        )
+    except Exception:
+        logger.debug("History window failed", exc_info=True)
+        return
+    if windowed == messages:
+        return
+    logger.info(
+        "History window: %d → %d messages", len(messages), len(windowed)
+    )
+    request_body.messages = [
+        ChatMessage(
+            role=m.role.value,
+            content=m.content,
+            name=m.name,
+            tool_call_id=m.tool_call_id,
+        )
+        for m in windowed
+    ]
+
+
 def _to_messages(chat_messages) -> list[Message]:
     """Convert Pydantic ChatMessage objects to core Message objects."""
     messages = []
@@ -107,12 +138,33 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
 
+    config = getattr(request.app.state, "config", None)
+    bus = getattr(request.app.state, "bus", None)
+
+    # ── History window: recent turns verbatim, older ones summarised ──
+    if config is not None and config.agent.history_window > 0:
+        _apply_history_window(request_body, config, engine)
+
+    # Route through the agent whenever the server-side agent has its own
+    # tools (so e.g. knowledge_search runs even though the client doesn't
+    # pass tools in the request body).
+    agent_has_tools = agent is not None and bool(getattr(agent, "_tools", None))
+    if request_body.stream:
+        uses_agent = (
+            agent is not None
+            and bus is not None
+            and (bool(request_body.tools) or agent_has_tools)
+        )
+    else:
+        uses_agent = agent is not None
+
     # ── Inject system prompt (persona + user profile) ──────────────
     # Only add when no system message is present — callers that already
-    # provide their own system prompt are not overridden.
-    config = getattr(request.app.state, "config", None)
+    # provide their own system prompt are not overridden.  Agents that
+    # assemble the persona themselves would otherwise receive it twice.
     has_system = any(m.role == "system" for m in request_body.messages)
-    if not has_system:
+    skip_persona = uses_agent and getattr(agent, "builds_own_persona", False)
+    if not has_system and not skip_persona:
         system_text = _build_system_prompt(config)
         if system_text:
             from openjarvis.server.models import ChatMessage as _CM
@@ -207,30 +259,43 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
                 exc_info=True,
             )
 
-    if request_body.stream:
-        bus = getattr(request.app.state, "bus", None)
-        # Route through the agent stream bridge whenever the server-side
-        # agent has its own tools (so e.g. knowledge_search runs even though
-        # the client doesn't pass tools in the request body). The bridge
-        # runs agent.run() synchronously and word-splits the result, which
-        # sacrifices true token-by-token streaming — accepted tradeoff to
-        # keep tool calls working in the desktop app.
-        agent_has_tools = agent is not None and bool(
-            getattr(agent, "_tools", None)
+    # ── Tiered routing: fast model by default, strong model when needed ─
+    escalation_model = ""
+    if config is not None and query_text_for_complexity:
+        from openjarvis.learning.routing.tiered import route_tier
+
+        intel = config.intelligence
+        decision = route_tier(
+            query_text_for_complexity,
+            model,
+            fast_model=intel.fast_model,
+            strong_model=intel.strong_model or intel.default_model,
         )
-        if (
-            agent is not None
-            and bus is not None
-            and (request_body.tools or agent_has_tools)
-        ):
-            return await _handle_agent_stream(agent, bus, model, request_body)
+        if decision.model != model:
+            logger.info(
+                "Tiered routing: %s → %s (%s)", model, decision.model, decision.reason
+            )
+        model = decision.model
+        if uses_agent:
+            escalation_model = decision.escalation_model
+
+    if request_body.stream:
+        # The agent stream bridge runs agent.run() synchronously and
+        # word-splits the result, which sacrifices true token-by-token
+        # streaming — accepted tradeoff to keep tool calls working in the
+        # desktop app.
+        if uses_agent:
+            return await _handle_agent_stream(
+                agent, bus, model, request_body, escalation_model
+            )
         return await _handle_stream(engine, model, request_body, complexity_info)
 
     # Non-streaming: use agent if available, otherwise direct engine call
-    if agent is not None:
-        return _handle_agent(agent, model, request_body, complexity_info)
+    if uses_agent:
+        return _handle_agent(
+            agent, model, request_body, complexity_info, escalation_model
+        )
 
-    bus = getattr(request.app.state, "bus", None)
     return _handle_direct(
         engine,
         model,
@@ -313,6 +378,7 @@ def _handle_agent(
     model: str,
     req: ChatCompletionRequest,
     complexity_info=None,
+    escalation_model: str = "",
 ) -> ChatCompletionResponse:
     """Run through agent."""
     from openjarvis.agents._stubs import AgentContext
@@ -331,10 +397,14 @@ def _handle_agent(
     original_model = agent._model
     if model:
         agent._model = model
+    agent._escalation_model = escalation_model
     try:
         result = agent.run(input_text, context=ctx)
+        # The agent may have escalated to a stronger model mid-turn.
+        model = agent._model or model
     finally:
         agent._model = original_model
+        agent._escalation_model = ""
 
     usage = UsageInfo(
         prompt_tokens=result.metadata.get("prompt_tokens", 0),
@@ -370,11 +440,13 @@ def _handle_agent(
     )
 
 
-async def _handle_agent_stream(agent, bus, model, req):
+async def _handle_agent_stream(agent, bus, model, req, escalation_model=""):
     """Stream agent response with EventBus events via SSE."""
     from openjarvis.server.stream_bridge import create_agent_stream
 
-    return await create_agent_stream(agent, bus, model, req)
+    return await create_agent_stream(
+        agent, bus, model, req, escalation_model=escalation_model
+    )
 
 
 async def _handle_stream(

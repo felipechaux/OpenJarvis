@@ -179,6 +179,13 @@ def test_build_summarizer_prefers_haiku_then_server_model():
     assert engine.models == ["claude-cli/haiku", "claude-cli/opus"]
 
 
+def test_build_summarizer_uses_configured_fast_model():
+    engine = FakeEngine(["Listo, señor, los tests pasan."])
+    summarize = rm.build_summarizer(engine, "claude-cli/opus", "antigravity/flash")
+    assert summarize("respuesta final larga") == "Listo, señor, los tests pasan."
+    assert engine.models == ["antigravity/flash"]
+
+
 def test_build_summarizer_wraps_reply_as_data():
     engine = FakeEngine(["Resumen corto de la sesión."])
     captured = {}

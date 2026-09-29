@@ -73,11 +73,13 @@ class AgentStreamBridge:
         bus: EventBus,
         model: str,
         request: ChatCompletionRequest,
+        escalation_model: str = "",
     ) -> None:
         self._agent = agent
         self._bus = bus
         self._model = model
         self._request = request
+        self._escalation_model = escalation_model
         self._chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         self._queue: asyncio.Queue = asyncio.Queue()
         self._callbacks: dict[EventType, object] = {}
@@ -137,10 +139,12 @@ class AgentStreamBridge:
         original_model = self._agent._model
         if self._model:
             self._agent._model = self._model
+        self._agent._escalation_model = self._escalation_model
         try:
             return self._agent.run(input_text, context=ctx)
         finally:
             self._agent._model = original_model
+            self._agent._escalation_model = ""
 
     # ------------------------------------------------------------------
     # Public streaming interface
@@ -309,9 +313,13 @@ async def create_agent_stream(
     bus: EventBus,
     model: str,
     request: ChatCompletionRequest,
+    *,
+    escalation_model: str = "",
 ) -> StreamingResponse:
     """Create an AgentStreamBridge and return a FastAPI StreamingResponse."""
-    bridge = AgentStreamBridge(agent, bus, model, request)
+    bridge = AgentStreamBridge(
+        agent, bus, model, request, escalation_model=escalation_model
+    )
     return StreamingResponse(
         bridge.stream(),
         media_type="text/event-stream",

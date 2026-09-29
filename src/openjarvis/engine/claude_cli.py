@@ -176,14 +176,18 @@ class ClaudeCLIEngine(InferenceEngine):
     @staticmethod
     def _usage_from(data: Dict[str, Any], messages: Sequence[Message], text: str):
         u = data.get("usage") or {}
+        cache_read = int(u.get("cache_read_input_tokens") or 0)
         prompt = (
             int(u.get("input_tokens") or 0)
-            + int(u.get("cache_read_input_tokens") or 0)
+            + cache_read
             + int(u.get("cache_creation_input_tokens") or 0)
         ) or estimate_prompt_tokens(messages)
         completion = int(u.get("output_tokens") or 0) or max(1, len(text) // 4)
         return {
             "prompt_tokens": prompt,
+            # Tokens actually processed: prompt-cache reads are excluded.
+            "prompt_tokens_evaluated": max(prompt - cache_read, 0),
+            "cache_read_tokens": cache_read,
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
         }

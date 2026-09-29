@@ -88,14 +88,18 @@ def clean_spoken_summary(text: str, max_words: int = 90) -> str:
     return text
 
 
-def build_summarizer(engine: Any, model: str) -> Callable[[str], str]:
+def build_summarizer(
+    engine: Any, model: str, fast_model: str = ""
+) -> Callable[[str], str]:
     """Summarise a final reply for speech with ``engine`` ("" on failure).
 
-    Tries the fast model first when the engine is the Claude CLI, then the
-    server's own model.
+    Tries the fast model first (``fast_model`` from config, else Haiku when
+    the engine is the Claude CLI), then the server's own model.
     """
     models: List[str] = []
-    if str(model).startswith("claude-cli/"):
+    if fast_model:
+        models.append(fast_model)
+    elif str(model).startswith("claude-cli/"):
         models.append(_SUMMARY_MODEL)
     if model and model not in models:
         models.append(model)
@@ -131,7 +135,11 @@ def set_summarizer(fn: Optional[Callable[[str], str]]) -> None:
 
 def _ensure_summarizer(state: Any) -> None:
     if _summarizer is None and getattr(state, "engine", None) is not None:
-        set_summarizer(build_summarizer(state.engine, getattr(state, "model", "")))
+        config = getattr(state, "config", None)
+        fast_model = getattr(getattr(config, "intelligence", None), "fast_model", "")
+        set_summarizer(
+            build_summarizer(state.engine, getattr(state, "model", ""), fast_model)
+        )
 
 
 def _last_reply(transcript_path: str) -> str:

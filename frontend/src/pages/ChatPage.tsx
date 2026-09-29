@@ -10,6 +10,31 @@ import { INTERRUPT_EVENT } from '../hooks/useWakeWord';
 // Module-level flag: survives StrictMode remounts, resets only on full page reload
 let _greetingComplete = false;
 
+// The briefing runs once per calendar day (Bogotá); later launches and
+// reloads that day skip it.  Stored as YYYY-MM-DD.
+const LAST_GREETING_KEY = 'jarvis.lastGreetingDate';
+
+function todayInBogota(): string {
+  // en-CA formats as YYYY-MM-DD.
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+}
+
+function greetedToday(): boolean {
+  try {
+    return localStorage.getItem(LAST_GREETING_KEY) === todayInBogota();
+  } catch {
+    return false;
+  }
+}
+
+function markGreetedToday(): void {
+  try {
+    localStorage.setItem(LAST_GREETING_KEY, todayInBogota());
+  } catch {
+    // Storage unavailable: worst case the briefing repeats next launch.
+  }
+}
+
 export function ChatPage() {
   const systemPanelOpen = useAppStore((s) => s.systemPanelOpen);
   const greeted = useAppStore((s) => s.greeted);
@@ -42,6 +67,11 @@ export function ChatPage() {
     // Wait for App to reconcile the saved model with the server default;
     // otherwise the greeting fires with a stale localStorage selection.
     if (_greetingComplete || !selectedModel || modelsLoading) return;
+    if (greetedToday()) {
+      _greetingComplete = true;
+      setGreeted(true);
+      return;
+    }
 
     const controller = new AbortController();
 
@@ -52,6 +82,8 @@ export function ChatPage() {
     const onInterrupt = () => {
       if (controller.signal.aborted) return;
       _greetingComplete = true;
+      // The user cut in on purpose: they have been greeted for today.
+      markGreetedToday();
       controller.abort();
       stopSpeaking();
       resetStream();
@@ -153,6 +185,8 @@ REGLAS ABSOLUTAS:
           const remaining = ttsBuffer.trim();
           if (remaining) enqueueSpeech(remaining);
         }
+        // Only a delivered briefing counts; a failed one retries next launch.
+        if (accumulated.trim()) markGreetedToday();
 
       } catch (err) {
         if (err instanceof Error && err.name === 'AbortError') return;

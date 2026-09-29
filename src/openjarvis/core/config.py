@@ -557,6 +557,11 @@ class IntelligenceConfig:
     top_k: int = 40
     repetition_penalty: float = 1.0
     stop_sequences: str = ""  # Comma-separated stop strings
+    # Tiered routing: when ``fast_model`` is set, chat requests aimed at the
+    # default/strong model go to the fast model unless the query looks hard;
+    # the fast model can still hand the turn over with ``Action: escalate``.
+    fast_model: str = ""
+    strong_model: str = ""  # empty → default_model
 
 
 @dataclass(slots=True)
@@ -830,6 +835,8 @@ class LauncherConfig:
     # Bypass tool permission prompts in started coding sessions
     # (--dangerously-skip-permissions).
     dangerously_skip_permissions: bool = False
+    # ``--model`` for started Claude Code sessions ("" = the CLI's own default).
+    claude_model: str = "opus"
 
 
 @dataclass
@@ -862,6 +869,15 @@ class AgentConfig:
     system_prompt: str = ""  # inline system prompt (takes precedence if set)
     system_prompt_path: str = ""  # path to system prompt file (.txt, .md)
     context_from_memory: bool = True  # inject relevant memory context into prompts
+    # Send full descriptions only for tools the conversation seems to need;
+    # the rest are listed as one-line signatures.
+    dynamic_tools: bool = True
+    # Chat requests keep at most this many recent messages verbatim; older
+    # ones are summarised by ``intelligence.fast_model`` (0 = send all).
+    history_window: int = 16
+    # Answer simple commands (music controls, "abre X", weather) with one
+    # tool call and a canned reply, without calling the model.
+    fast_paths: bool = True
     default_system_prompt: str = (
         "You are a helpful AI assistant running locally on the user's own "
         "hardware through OpenJarvis. You are not a cloud service. Respond "

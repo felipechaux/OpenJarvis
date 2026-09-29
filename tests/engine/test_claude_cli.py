@@ -74,6 +74,29 @@ class TestEnv:
 
 
 class TestGenerate:
+    def test_usage_separates_prompt_cache_reads(self) -> None:
+        out = json.dumps(
+            {
+                "type": "result",
+                "is_error": False,
+                "result": "ok",
+                "usage": {
+                    "input_tokens": 50,
+                    "cache_read_input_tokens": 2000,
+                    "cache_creation_input_tokens": 300,
+                    "output_tokens": 4,
+                },
+            }
+        )
+        fake = subprocess.CompletedProcess([], 0, stdout=out + "\n", stderr="")
+        with patch("subprocess.run", return_value=fake):
+            res = _engine().generate(
+                [Message(role=Role.USER, content="Hola")], model="claude-cli/haiku"
+            )
+        assert res["usage"]["prompt_tokens"] == 2350
+        assert res["usage"]["prompt_tokens_evaluated"] == 350
+        assert res["usage"]["cache_read_tokens"] == 2000
+
     def test_generate_parses_json_result(self) -> None:
         out = json.dumps(
             {

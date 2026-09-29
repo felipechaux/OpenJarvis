@@ -39,6 +39,7 @@ def instrumented_generate(
         model_id=model,
         engine=engine.engine_id,
         prompt_tokens=usage.get("prompt_tokens", 0),
+        prompt_tokens_evaluated=usage.get("prompt_tokens_evaluated", 0),
         completion_tokens=usage.get("completion_tokens", 0),
         total_tokens=usage.get("total_tokens", 0),
         latency_seconds=latency,

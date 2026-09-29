@@ -6,6 +6,7 @@ implementation, not an integration with an external project.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, List, Optional
 
@@ -19,6 +20,8 @@ from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import Message, Role, ToolCall, ToolResult, _message_to_dict
 from openjarvis.engine._stubs import InferenceEngine
 from openjarvis.tools._stubs import BaseTool, build_tool_descriptions
+
+logger = logging.getLogger(__name__)
 
 REACT_SYSTEM_PROMPT = """\
 You are a ReAct agent. For each step, respond with exactly one of:
@@ -123,11 +126,62 @@ emails, calendar, contacts) or asks something only a tool can answer
 {skill_examples}{tool_descriptions}"""
 
 
+# Claude follows the protocol without the long anti-hallucination catalogue
+# above (written for Gemini / Nemotron), so Claude models get this version.
+REACT_SYSTEM_PROMPT_COMPACT = """\
+# Tool protocol
+
+To call a tool, reply with exactly these two lines and then STOP:
+Action: <tool_name>
+Action Input: <json arguments>
+
+The harness runs the tool and answers in a new message starting with
+`Observation:`.  Only the harness writes observations: never invent tool
+output, and never describe a tool call in prose instead of making it.
+
+To answer, reply with:
+Final Answer: <your answer>
+
+Keep the keywords `Action:`, `Action Input:` and `Final Answer:` in English;
+write the answer itself in the user's language.  Do not write out your
+reasoning.
+
+Answer greetings, small talk and general knowledge directly with a
+`Final Answer:`.  Call a tool only when the request involves the user's own
+data or something only a tool can do.  Tools named `skill_*` may return
+instructions instead of a value: follow them with your other tools and do not
+call the same skill again.
+
+{skill_examples}{tool_descriptions}"""
+
+ESCALATE_ACTION = "escalate"
+
+ESCALATION_PROMPT = """\
+# Escalation
+
+You are the fast model.  If the request needs deep reasoning, careful or
+long-form writing, code, detailed analysis or multi-step planning, do not
+attempt it; reply with only:
+Action: escalate
+Action Input: {}
+A stronger model then takes over the turn.  Never escalate greetings, small
+talk, simple facts or simple tool requests.  Coding sessions (Claude Code,
+Antigravity) do their own heavy work: starting one, relaying instructions to
+it with `send_to_session`, or summarising what it did is never a reason to
+escalate, even when the task itself is about code.
+
+"""
+
+
 @AgentRegistry.register("native_react")
 class NativeReActAgent(ToolUsingAgent):
     """ReAct agent: Thought -> Action -> Observation loop."""
 
     agent_id = "native_react"
+    # The server skips its own persona injection for agents that build one.
+    builds_own_persona = True
+    # Set per request by the tiered router; "" disables escalation.
+    _escalation_model = ""
     _default_temperature = 0.7
     _default_max_tokens = 1024
     _default_max_turns = 10
@@ -334,6 +388,131 @@ class NativeReActAgent(ToolUsingAgent):
 
         return result
 
+    def _can_escalate(self) -> bool:
+        target = self._escalation_model
+        return bool(target) and target != self._model
+
+    def _compose_system_prompt(
+        self,
+        input: str,
+        context: Optional[AgentContext],
+        *,
+        allow_escalation: bool,
+    ) -> str:
+        """Persona (SOUL, MEMORY, USER) followed by the ReAct instructions."""
+        try:
+            from openjarvis.core.config import load_config
+            cfg = load_config()
+        except Exception:
+            cfg = None
+
+        persona_template = ""
+        dynamic_tools = True
+        if cfg is not None:
+            persona_template = (
+                cfg.agent.system_prompt or cfg.agent.default_system_prompt
+            )
+            dynamic_tools = cfg.agent.dynamic_tools
+            # SOUL.md already carries the full persona; the config default
+            # is a shorter copy of it, so sending both only burns tokens.
+            if not cfg.agent.system_prompt and _has_soul(cfg):
+                persona_template = ""
+
+        from openjarvis.prompt.builder import SystemPromptBuilder
+        builder = SystemPromptBuilder(
+            agent_template=persona_template,
+            skill_few_shot_examples=self._skill_few_shot_examples,
+        )
+        base_persona = builder.build().strip()
+
+        if dynamic_tools:
+            from openjarvis.agents.tool_selection import (
+                build_selected_tool_descriptions,
+            )
+            tool_desc = build_selected_tool_descriptions(
+                self._tools, _recent_user_texts(input, context)
+            )
+        else:
+            tool_desc = build_tool_descriptions(self._tools)
+
+        # Plan 2B I3: render optimized few-shot skill examples as a section
+        # before the tool descriptions. Empty string when not present.
+        examples_block = ESCALATION_PROMPT if allow_escalation else ""
+        if self._skill_few_shot_examples:
+            examples_block += (
+                "## Skill Examples\n\n"
+                + "\n\n".join(self._skill_few_shot_examples)
+                + "\n\n"
+            )
+
+        compact = _uses_compact_prompt(self._model)
+        template = REACT_SYSTEM_PROMPT_COMPACT if compact else REACT_SYSTEM_PROMPT
+        react_instructions = template.format(
+            tool_descriptions=tool_desc,
+            skill_examples=examples_block,
+        )
+        if _omits_written_reasoning(self._model) and not compact:
+            react_instructions = _strip_thought_protocol(react_instructions)
+        return base_persona + "\n\n---\n\n" + react_instructions
+
+    def _try_fast_path(self, input: str) -> Optional[AgentResult]:
+        """Handle simple commands with one tool call and no model call."""
+        try:
+            from openjarvis.core.config import load_config
+            if not load_config().agent.fast_paths:
+                return None
+        except Exception:
+            pass
+        from openjarvis.agents.fast_paths import match_fast_path
+
+        path = match_fast_path(input, {t.spec.name for t in self._tools})
+        if path is None:
+            return None
+        import json as _json
+
+        tool_result = self._executor.execute(
+            ToolCall(
+                id="fast_1", name=path.tool, arguments=_json.dumps(path.arguments)
+            )
+        )
+        reply = path.reply(tool_result)
+        if reply is None:
+            # Failed or unexpected output: let the model explain it.  The
+            # failed call is not retried here; the model decides.
+            return None
+        logger.info("native_react: fast path %s(%s)", path.tool, path.arguments)
+        self._emit_turn_end(turns=0)
+        return AgentResult(
+            content=reply,
+            tool_results=[tool_result],
+            turns=0,
+            metadata={
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "fast_path": path.tool,
+            },
+        )
+
+    def _escalate(
+        self,
+        messages: list[Message],
+        input: str,
+        context: Optional[AgentContext],
+    ) -> None:
+        """Hand the turn to the escalation model and rebuild its prompt."""
+        logger.info(
+            "native_react: %s escalated to %s", self._model, self._escalation_model
+        )
+        self._model = self._escalation_model
+        system_prompt = self._compose_system_prompt(
+            input, context, allow_escalation=False
+        )
+        if messages and messages[0].role == Role.SYSTEM:
+            messages[0] = Message(role=Role.SYSTEM, content=system_prompt)
+        else:
+            messages.insert(0, Message(role=Role.SYSTEM, content=system_prompt))
+
     def run(
         self,
         input: str,
@@ -342,44 +521,14 @@ class NativeReActAgent(ToolUsingAgent):
     ) -> AgentResult:
         self._emit_turn_start(input)
 
-        # Build system prompt with rich tool descriptions
-        tool_desc = build_tool_descriptions(self._tools)
-        # Plan 2B I3: render optimized few-shot skill examples as a section
-        # before the tool descriptions. Empty string when not present.
-        if self._skill_few_shot_examples:
-            skill_examples_block = (
-                "## Skill Examples\n\n"
-                + "\n\n".join(self._skill_few_shot_examples)
-                + "\n\n"
-            )
-        else:
-            skill_examples_block = ""
-        # Load configuration for prompt building
-        try:
-            from openjarvis.core.config import load_config
-            cfg = load_config()
-            persona_template = cfg.agent.system_prompt or cfg.agent.default_system_prompt
-        except Exception:
-            persona_template = ""
+        fast = self._try_fast_path(input)
+        if fast is not None:
+            return fast
 
-        # Use SystemPromptBuilder to assemble the full persona (SOUL, MEMORY, USER)
-        # and then append the ReAct-specific instructions.
-        from openjarvis.prompt.builder import SystemPromptBuilder
-        builder = SystemPromptBuilder(
-            agent_template=persona_template,
-            skill_few_shot_examples=self._skill_few_shot_examples,
-        )
-
-        base_persona = builder.build()
-        react_instructions = REACT_SYSTEM_PROMPT.format(
-            tool_descriptions=tool_desc,
-            skill_examples=skill_examples_block,
+        system_prompt = self._compose_system_prompt(
+            input, context, allow_escalation=self._can_escalate()
         )
         omit_thoughts = _omits_written_reasoning(self._model)
-        if omit_thoughts:
-            react_instructions = _strip_thought_protocol(react_instructions)
-
-        system_prompt = base_persona + "\n\n---\n\n" + react_instructions
 
         messages = self._build_messages(input, context, system_prompt=system_prompt)
 
@@ -424,6 +573,18 @@ class NativeReActAgent(ToolUsingAgent):
                     turns=turns,
                     metadata={**total_usage, "messages": msg_dicts},
                 )
+
+            if parsed["action"] == ESCALATE_ACTION:
+                if self._can_escalate():
+                    self._escalate(messages, input, context)
+                else:
+                    messages.append(Message(role=Role.ASSISTANT, content=content))
+                    messages.append(Message(
+                        role=Role.USER,
+                        content="Observation: escalation is unavailable; "
+                        "answer directly.",
+                    ))
+                continue
 
             # No action? Treat content as final answer
             if not parsed["action"]:
@@ -487,6 +648,35 @@ _WRITTEN_REASONING_UNSUPPORTED_PREFIXES = ("claude-cli/", "claude-")
 _THOUGHT_LINE_RE = re.compile(r"^[ \t]*Thought:.*\n?", re.MULTILINE)
 
 
+def _uses_compact_prompt(model: str) -> bool:
+    return (model or "").startswith(_WRITTEN_REASONING_UNSUPPORTED_PREFIXES)
+
+
+def _has_soul(cfg: Any) -> bool:
+    from pathlib import Path
+
+    try:
+        path = Path(cfg.memory_files.soul_path).expanduser()
+        return path.is_file() and bool(path.read_text().strip())
+    except (AttributeError, OSError):
+        return False
+
+
+def _recent_user_texts(
+    input: str, context: Optional[AgentContext], limit: int = 2
+) -> list[str]:
+    """The current input plus the last *limit* user messages of the context."""
+    texts = [input]
+    if context is not None:
+        prior = [
+            m.content or ""
+            for m in context.conversation.messages
+            if m.role == Role.USER
+        ]
+        texts.extend(prior[-limit:])
+    return texts
+
+
 def _omits_written_reasoning(model: str) -> bool:
     return (model or "").startswith(_WRITTEN_REASONING_UNSUPPORTED_PREFIXES)
 
@@ -511,4 +701,4 @@ def _strip_thought_protocol(prompt: str) -> str:
         "`Action Input:` lines or a `Final Answer:` line."
     )
 
-__all__ = ["NativeReActAgent", "REACT_SYSTEM_PROMPT"]
+__all__ = ["NativeReActAgent", "REACT_SYSTEM_PROMPT", "REACT_SYSTEM_PROMPT_COMPACT"]

@@ -455,6 +455,7 @@ def build_assistant_command(
     session_id: str = "",
     settings: str = "",
     dangerously_skip_permissions: bool = False,
+    model: str = "",
 ) -> str:
     """Command line that starts an interactive ``cli`` session (no ``cd``).
 
@@ -476,6 +477,8 @@ def build_assistant_command(
         if session_id:
             parts += ["--session-id", shlex.quote(session_id)]
         parts += ["--name", shlex.quote(f"jarvis: {project.name}")]
+        if model:
+            parts += ["--model", shlex.quote(model)]
         if settings:
             parts += ["--settings", shlex.quote(settings)]
         if task:
@@ -491,6 +494,7 @@ def build_session_command(
     task: str = "",
     session_id: str = "",
     dangerously_skip_permissions: bool = False,
+    model: str = "",
 ) -> str:
     """Shell command that ``cd``s into ``project`` and starts ``cli`` there."""
     command = build_assistant_command(
@@ -499,6 +503,7 @@ def build_session_command(
         task,
         session_id,
         dangerously_skip_permissions=dangerously_skip_permissions,
+        model=model,
     )
     return f"cd {shlex.quote(str(project))} && {command}"
 
@@ -561,6 +566,7 @@ class StartCodingSessionTool(BaseTool):
         # Config only, never a tool argument: JARVIS also reads untrusted
         # text, which must not be able to start a session without prompts.
         skip_perms = getattr(cfg, "dangerously_skip_permissions", False) is True
+        claude_model = str(getattr(cfg, "claude_model", "") or "")
 
         task = str(params.get("task") or "").strip()
         terminal = cfg.terminal or "Terminal"
@@ -601,6 +607,7 @@ class StartCodingSessionTool(BaseTool):
                     session_id,
                     settings,
                     dangerously_skip_permissions=skip_perms,
+                    model=claude_model,
                 )
                 sc.new_session(tmux_name, project, command)
                 _run_in_terminal(terminal, sc.attach_command(tmux_name))
@@ -614,7 +621,8 @@ class StartCodingSessionTool(BaseTool):
                         task,
                         session_id,
                         dangerously_skip_permissions=skip_perms,
-                        ),
+                        model=claude_model,
+                    ),
                 )
         except (subprocess.SubprocessError, OSError, RuntimeError) as exc:
             detail = getattr(exc, "stderr", b"") or b""
