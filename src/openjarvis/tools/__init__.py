@@ -142,6 +142,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.model_switch  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
 except ImportError:
     pass

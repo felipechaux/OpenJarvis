@@ -32,6 +32,7 @@ TRUSTED_OUTPUT_TOOLS = frozenset({
     "open_url",
     "spotify",
     "get_weather",
+    "model_switch",
     "start_coding_session",
     "coding_sessions",
     "send_to_session",

@@ -59,6 +59,10 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"|nodo|grafo|graph|anota|guarda"
         ),
         "show_knowledge_graph": r"grafo|graph|obsidian|conocimiento|knowledge",
+        "model_switch": (
+            r"modelo|model|claude|gemini|antigravity|cuota|quota|l[ií]mite"
+            r"|proveedor|provider"
+        ),
         "get_weather": (
             r"clima|el tiempo|temperatura|llov|lluvia|pron[oó]stico|weather"
             r"|forecast|fr[ií]o|calor|paraguas"

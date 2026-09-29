@@ -247,7 +247,54 @@ def _match_weather(text: str) -> Optional[FastPath]:
     )
 
 
-_MATCHERS = (_match_spotify, _match_weather, _match_knowledge_graph, _match_open_app)
+# ── model_switch ───────────────────────────────────────────────────────────
+
+_USE_GEMINI_RE = re.compile(
+    r"^(?:usa|use|c[aá]mbia(?:te)?\s+a|p[aá]sate\s+a|switch\s+to)\s+"
+    r"(?:el\s+modelo\s+(?:de\s+)?)?(?:gemini|antigravity)$",
+    re.IGNORECASE,
+)
+_USE_CLAUDE_RE = re.compile(
+    r"^(?:vuelve\s+a|regresa\s+a|usa|use|c[aá]mbia(?:te)?\s+a|p[aá]sate\s+a"
+    r"|switch\s+(?:back\s+)?to)\s+(?:el\s+modelo\s+(?:de\s+)?)?claude$",
+    re.IGNORECASE,
+)
+_MODEL_STATUS_RE = re.compile(
+    r"^(?:qu[eé]|cu[aá]l)\s+modelo\s+(?:est[aá]s\s+usando|usas|tienes|es)"
+    r"(?:\s+ahora)?$|^(?:which|what)\s+model\s+are\s+you\s+using(?:\s+now)?$",
+    re.IGNORECASE,
+)
+
+
+def _model_switch_reply(result: ToolResult) -> Optional[str]:
+    if not result.success:
+        return None
+    action = (result.metadata or {}).get("action")
+    lead = {
+        "use_gemini": "Entendido, señor: dejo Claude en pausa. ",
+        "use_claude": "De vuelta con Claude, señor. ",
+    }.get(action, "")
+    return lead + (result.content or "")
+
+
+def _match_model_switch(text: str) -> Optional[FastPath]:
+    for action, pattern in (
+        ("use_gemini", _USE_GEMINI_RE),
+        ("use_claude", _USE_CLAUDE_RE),
+        ("status", _MODEL_STATUS_RE),
+    ):
+        if pattern.match(text):
+            return FastPath("model_switch", {"action": action}, _model_switch_reply)
+    return None
+
+
+_MATCHERS = (
+    _match_model_switch,
+    _match_spotify,
+    _match_weather,
+    _match_knowledge_graph,
+    _match_open_app,
+)
 
 
 def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
