@@ -141,6 +141,8 @@ class LookAtScreenTool(BaseTool):
                 },
                 "required": [],
             },
+            # Capture + a vision call, possibly retried on Antigravity.
+            timeout_seconds=180,
         )
 
     def execute(self, **params: Any) -> ToolResult:

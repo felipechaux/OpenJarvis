@@ -96,3 +96,7 @@ def test_voice_commands_hit_the_fast_path(text):
 
 def test_questions_about_the_screen_go_to_the_model():
     assert match_fast_path("mira mi pantalla y arregla el error", {"look_at_screen"}) is None
+
+
+def test_timeout_leaves_room_for_the_vision_fallback():
+    assert LookAtScreenTool().spec.timeout_seconds >= 120
