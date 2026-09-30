@@ -8,6 +8,15 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   <link rel="icon" href="/favicon.ico" />
   <title>OpenJarvis</title>
+  <!-- The notch window must be see-through from the first frame: without
+       this the app's dark background shows as a black box at the top of the
+       screen until the notch page's own styles load. -->
+  <style>
+    html.notch-window, html.notch-window body { background: transparent !important; }
+  </style>
+  <script>
+    if (/\/notch\/?$/.test(location.pathname)) document.documentElement.classList.add('notch-window');
+  </script>
 </head>
 <body>
   <div id="root"></div>

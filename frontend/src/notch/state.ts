@@ -23,6 +23,8 @@ export interface NotchLevel {
 }
 
 export const NOTCH_LABEL = 'notch';
+/// The launch intro's reactor reaching the notch: the pill "catches" it.
+export const NOTCH_DOCK_EVENT = 'notch:dock';
 
 const TOOL_LABELS: Record<string, string> = {
   look_at_screen: 'Mirando tu pantalla',

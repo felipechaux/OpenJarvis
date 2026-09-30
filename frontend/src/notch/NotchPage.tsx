@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { NOTCH_EVENT, NOTCH_LEVEL_EVENT, type NotchLevel, type NotchState } from './state';
+import {
+  NOTCH_DOCK_EVENT,
+  NOTCH_EVENT,
+  NOTCH_LEVEL_EVENT,
+  type NotchLevel,
+  type NotchState,
+} from './state';
 import { ArcReactor } from '../components/Chat/ArcReactor';
 import type { AudioAnalyzerData } from '../hooks/useTTS';
 import { playEarcon } from '../lib/earcons';
@@ -23,6 +29,8 @@ const AUTO_CLOSE_MS = 6000;
 const ROW_H = 38;
 const REACTOR_ROW = 30;
 const REACTOR_OPEN = 64;
+// How long the pill celebrates catching the launch intro's reactor.
+const DOCK_MS = 1700;
 
 const PREVIEW = new URLSearchParams(window.location.search);
 
@@ -115,6 +123,7 @@ function useVoiceLevel(presence: NotchState['presence']) {
 export function NotchPage() {
   const [state, setState] = useState<NotchState>(previewState);
   const [open, setOpen] = useState(() => PREVIEW.has('open'));
+  const [docking, setDocking] = useState(() => PREVIEW.has('dock'));
   const pill = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   const line = useRef<HTMLDivElement>(null);
@@ -134,6 +143,28 @@ export function NotchPage() {
       })
       .catch(() => {}); // plain browser (preview): no Tauri events
     return () => unlisten();
+  }, []);
+
+  // The launch intro's reactor flies into the notch: catch it.
+  useEffect(() => {
+    let unlisten = () => {};
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen(NOTCH_DOCK_EVENT, () => {
+          setDocking(true);
+          clearTimeout(timer);
+          timer = setTimeout(() => setDocking(false), DOCK_MS);
+        }),
+      )
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unlisten();
+      clearTimeout(timer);
+    };
   }, []);
 
   // The pill's height follows its content (explicit px, so the spring can
@@ -205,6 +236,7 @@ export function NotchPage() {
     `notch--${presence}`,
     status ? 'notch--text' : '',
     open ? 'notch--open' : '',
+    docking ? 'notch--docking' : '',
   ].join(' ');
   const height = presence === 'idle' && !open ? ROW_H : ROW_H + bodyH;
 
@@ -221,6 +253,7 @@ export function NotchPage() {
       <div className="notch__row">
         <span className="notch__reactor">
           <ArcReactor size={REACTOR_ROW} presence={presence} getAudioData={getAudioData} />
+          <i className="notch__shock" aria-hidden />
         </span>
         <span className="notch__bars" aria-hidden>
           {[0, 1, 2, 3, 4].map((i) => (

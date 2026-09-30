@@ -88,6 +88,8 @@ interface Settings {
   earcons: boolean;
   /** Full-screen Iron Man HUD while JARVIS is speaking (JarvisHud). */
   speakingHud: boolean;
+  /** Arc-reactor power-up intro with its sound when the app launches (BootIntro). */
+  bootIntro: boolean;
   language: AssistantLanguage;
 }
 
@@ -105,6 +107,7 @@ function loadSettings(): Settings {
     voiceFx: true,
     earcons: true,
     speakingHud: true,
+    bootIntro: true,
     language: 'es',
   };
   try {

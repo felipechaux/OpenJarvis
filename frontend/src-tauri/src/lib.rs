@@ -1718,6 +1718,13 @@ mod notch {
         }
     }
 
+    /// Centre of the notch row in global logical points (top-left origin):
+    /// where the launch intro's reactor docks.
+    pub fn anchor() -> (f64, f64) {
+        let (x, y) = target();
+        (x + WIDTH / 2.0, y + 19.0)
+    }
+
     fn place(win: &WebviewWindow, (x, y): (f64, f64)) {
         let _ = win.set_position(LogicalPosition::new(x, y));
     }
@@ -1789,6 +1796,28 @@ fn notch_hit_area(width: f64, height: f64) {
     notch::set_hit_area(width, height);
     #[cfg(not(target_os = "macos"))]
     let _ = (width, height);
+}
+
+/// The user's own launch-intro sound, `~/.openjarvis/boot-sound.mp3`, as raw
+/// bytes (an ArrayBuffer in JS).  Optional and never shipped: when it is
+/// missing the command errors and the intro plays its synthesized score.
+#[tauri::command]
+fn boot_sound() -> Result<tauri::ipc::Response, String> {
+    let home = std::env::var("HOME").map_err(|e| e.to_string())?;
+    let path = std::path::Path::new(&home).join(".openjarvis/boot-sound.mp3");
+    std::fs::read(path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| e.to_string())
+}
+
+/// Where the notch is on screen (global logical points), so the launch
+/// intro can fly its reactor towards it.  None off macOS.
+#[tauri::command]
+fn notch_anchor() -> Option<(f64, f64)> {
+    #[cfg(target_os = "macos")]
+    return Some(notch::anchor());
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -2306,6 +2335,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             notch_hit_area,
+            notch_anchor,
+            boot_sound,
             get_setup_status,
             get_api_base,
             wake_ready,

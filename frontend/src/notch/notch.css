@@ -113,6 +113,34 @@ html.notch-window #root {
   animation: notch-dots 1s ease-in-out infinite;
 }
 
+/* ── Launch intro docking: the pill catches the flying reactor ── */
+.notch__reactor {
+  position: relative;
+}
+.notch__shock {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--notch-accent);
+  opacity: 0;
+  pointer-events: none;
+}
+.notch.notch--docking {
+  width: 400px;
+  animation: notch-catch-glow 1.7s ease-out;
+}
+.notch--docking .notch__reactor {
+  opacity: 1;
+  animation: notch-catch 1.7s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.notch--docking .notch__shock {
+  animation: notch-shock 0.9s ease-out;
+}
+.notch--docking .notch__bars i {
+  opacity: 1;
+  animation: notch-wave 0.45s ease-in-out 3;
+}
+
 /* ── Collapsed status line: up to three lines, gliding to the newest words ── */
 .notch__body {
   padding-bottom: 12px;
@@ -239,6 +267,20 @@ html.notch-window #root {
   background: rgba(94, 231, 255, 0.3);
 }
 
+@keyframes notch-catch {
+  0% { transform: scale(2.2); filter: brightness(2.4); }
+  35% { transform: scale(1.15); filter: brightness(1.5); }
+  100% { transform: scale(0.86); filter: none; }
+}
+@keyframes notch-shock {
+  0% { transform: scale(0.4); opacity: 0.9; }
+  100% { transform: scale(5); opacity: 0; }
+}
+@keyframes notch-catch-glow {
+  0% { box-shadow: 0 0 0 rgba(0, 212, 255, 0); }
+  15% { box-shadow: 0 0 34px rgba(0, 212, 255, 0.55), 0 0 90px rgba(0, 212, 255, 0.25); }
+  100% { box-shadow: 0 0 0 rgba(0, 212, 255, 0); }
+}
 @keyframes notch-reveal {
   from { opacity: 0; transform: translateY(-6px); }
 }

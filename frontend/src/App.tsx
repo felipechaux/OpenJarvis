@@ -15,6 +15,7 @@ import { Toaster } from './components/ui/sonner';
 import { useAppStore } from './lib/store';
 import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } from './lib/api';
 import { OptInModal } from './components/OptInModal';
+import { BootIntro } from './components/BootIntro';
 import { useWakeWord } from './hooks/useWakeWord';
 import { useCompanionMode } from './hooks/useCompanionMode';
 import { useEarcons, useInteractionEarcons } from './hooks/useEarcons';
@@ -22,8 +23,29 @@ import { useNotchBridge } from './hooks/useNotchBridge';
 import { useSessionAnnouncements } from './hooks/useSessionAnnouncements';
 import { useChatIndexing } from './hooks/useChatIndexing';
 
+const INTRO_PLAYED_KEY = 'jarvis-intro-played';
+
+/// The launch intro plays once per app launch (sessionStorage survives
+/// webview reloads, not relaunches), in the main window only; `?intro`
+/// forces it, e.g. to preview it in a plain browser.
+function shouldPlayIntro(enabled: boolean): boolean {
+  if (new URLSearchParams(window.location.search).has('intro')) return true;
+  if (!isTauri() || !enabled || window.location.pathname.includes('companion')) return false;
+  try {
+    if (sessionStorage.getItem(INTRO_PLAYED_KEY)) return false;
+    sessionStorage.setItem(INTRO_PLAYED_KEY, '1');
+  } catch {
+    // storage unavailable — play it
+  }
+  return true;
+}
+
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
+  const [showIntro, setShowIntro] = useState(() =>
+    shouldPlayIntro(useAppStore.getState().settings.bootIntro),
+  );
+  const endIntro = useCallback(() => setShowIntro(false), []);
   const handleSetupReady = useCallback(() => setSetupDone(true), []);
   const setModels = useAppStore((s) => s.setModels);
   const setModelsLoading = useAppStore((s) => s.setModelsLoading);
@@ -231,29 +253,42 @@ export default function App() {
   //   })();
   // }, []);
 
-  if (!setupDone) {
-    return <SetupScreen onReady={handleSetupReady} />;
-  }
+  const intro = showIntro && (
+    <BootIntro
+      lang={settings.language === 'en' ? 'en' : 'es'}
+      sound={settings.earcons}
+      onDone={endIntro}
+    />
+  );
 
+  // The intro keeps one position in the tree across the setup → app switch;
+  // moving it would remount it and restart its animation and sound.
   return (
     <>
-      <Routes>
-        <Route element={<Layout />}>
-          <Route index element={<ChatPage />} />
-          <Route path="dashboard" element={<DashboardPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="get-started" element={<GetStartedPage />} />
-          <Route path="data-sources" element={<DataSourcesPage />} />
-          <Route path="agents" element={<AgentsPage />} />
-          <Route path="logs" element={<LogsPage />} />
-        </Route>
-        <Route path="companion" element={<CompanionPage />} />
-      </Routes>
-      <Toaster position="bottom-right" />
-      {commandPaletteOpen && <CommandPalette />}
-      {optInModalOpen && (
-        <OptInModal onClose={() => setOptInModalOpen(false)} />
+      {!setupDone ? (
+        <SetupScreen onReady={handleSetupReady} />
+      ) : (
+        <>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route index element={<ChatPage />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="settings" element={<SettingsPage />} />
+              <Route path="get-started" element={<GetStartedPage />} />
+              <Route path="data-sources" element={<DataSourcesPage />} />
+              <Route path="agents" element={<AgentsPage />} />
+              <Route path="logs" element={<LogsPage />} />
+            </Route>
+            <Route path="companion" element={<CompanionPage />} />
+          </Routes>
+          <Toaster position="bottom-right" />
+          {commandPaletteOpen && <CommandPalette />}
+          {optInModalOpen && (
+            <OptInModal onClose={() => setOptInModalOpen(false)} />
+          )}
+        </>
       )}
+      {intro}
     </>
   );
 }
