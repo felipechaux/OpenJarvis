@@ -720,8 +720,10 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             // Something is already listening — try to kill it
             #[cfg(target_os = "macos")]
             {
+                // Only the listening server: plain `-i :port` also lists
+                // clients of the port — this app included — and kill -9'd it.
                 if let Ok(output) = tokio::process::Command::new("lsof")
-                    .args(["-t", "-i", &format!(":{}", JARVIS_PORT)])
+                    .args(["-t", "-sTCP:LISTEN", "-i", &format!("tcp:{}", JARVIS_PORT)])
                     .output()
                     .await
                 {
