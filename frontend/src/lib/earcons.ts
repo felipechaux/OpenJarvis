@@ -5,6 +5,20 @@
 //   wake       rising three-note glass arpeggio over a soft air sweep
 //   processing quick descending two-note blip — "got it, working on it"
 //   done       soft bell dyad with shimmer — "your answer is ready"
+//   shutter    glassy click + tick — "looking at your screen"
+//   switch     two quick rising fifths — "changed model / provider"
+//   session    three-note bell call — "a coding session needs you"
+//   error      soft falling minor second — "that did not work"
+//   dismiss    single falling fourth, very soft — "heard nothing, standing by"
+//   reveal     crisp tick + rising glass fourth — notch pill opens
+//   conceal    softer tick + falling fourth — notch pill closes
+//   scan       holographic noise sweep + high tick — browser task begins
+//   point      swoosh then octave leap — "look here" (for on-screen pointing)
+//
+// reveal/conceal/point take their cue from Clicky (farzaa/clicky), which
+// ships a ~75 ms bright click (enter.mp3, ~2.1 kHz) and an eShop-style
+// G5 → G6 octave bell (eshop.mp3); here they are rebuilt from the same
+// glass partials so they sit with the rest of the HUD palette.
 //
 // Everything runs through one shared graph:
 //   voices ─ bus ─┬─ dry ────────────┬─ master ─ speakers
@@ -12,7 +26,19 @@
 // Kept deliberately quiet and brief (<0.5s) so the chimes never compete
 // with the voice or leak into the wake-word / VAD microphones.
 
-export type Earcon = 'wake' | 'processing' | 'done';
+export type Earcon =
+  | 'wake'
+  | 'processing'
+  | 'done'
+  | 'shutter'
+  | 'switch'
+  | 'session'
+  | 'error'
+  | 'dismiss'
+  | 'reveal'
+  | 'conceal'
+  | 'scan'
+  | 'point';
 
 interface ChimeGraph {
   ctx: AudioContext;
@@ -151,6 +177,58 @@ export function playEarcon(kind: Earcon): void {
       glass(g, 880, t, 0.5, 0.36, -0.1);
       glass(g, 1318.51, t + 0.035, 0.55, 0.26, 0.1);
       airSweep(g, t, 0.18, 6000, 3000, 0.12);
+      break;
+    case 'shutter':
+      // Camera-ish: a bright noise click, then a high glass tick.
+      airSweep(g, t, 0.06, 7000, 2500, 0.5);
+      glass(g, 2093, t + 0.05, 0.12, 0.3, 0.2);
+      break;
+    case 'switch':
+      // G5 → D6, then A5 → E6: two quick fifths climbing.
+      glass(g, 783.99, t, 0.18, 0.32, -0.2);
+      glass(g, 1174.66, t + 0.06, 0.2, 0.28, -0.2);
+      glass(g, 880, t + 0.14, 0.2, 0.32, 0.2);
+      glass(g, 1318.51, t + 0.2, 0.3, 0.28, 0.2);
+      break;
+    case 'session':
+      // C6 → E6 → G6 bell call, a touch slower than wake.
+      glass(g, 1046.5, t, 0.35, 0.4, -0.2);
+      glass(g, 1318.51, t + 0.13, 0.35, 0.36, 0);
+      glass(g, 1567.98, t + 0.26, 0.5, 0.34, 0.2);
+      break;
+    case 'error':
+      // E5 → D#5: a gentle "uh-oh", no harsh buzz.
+      glass(g, 659.25, t, 0.22, 0.34, 0);
+      glass(g, 622.25, t + 0.14, 0.4, 0.3, 0);
+      break;
+    case 'dismiss':
+      // B5 → F#5, barely there: listening ended without a request.
+      glass(g, 987.77, t, 0.14, 0.2, 0.1);
+      glass(g, 739.99, t + 0.07, 0.24, 0.17, -0.1);
+      break;
+    case 'reveal':
+      // Clicky's "enter" click, glassier: a 35 ms air tick, then B5 → E6.
+      airSweep(g, t, 0.035, 8000, 3500, 0.28);
+      glass(g, 987.77, t + 0.02, 0.16, 0.22, -0.1);
+      glass(g, 1318.51, t + 0.065, 0.26, 0.2, 0.1);
+      break;
+    case 'conceal':
+      // The mirror of reveal, quieter and lower: E6 → B5.
+      airSweep(g, t, 0.03, 6000, 2500, 0.2);
+      glass(g, 1318.51, t + 0.015, 0.12, 0.16, 0.1);
+      glass(g, 987.77, t + 0.06, 0.2, 0.16, -0.1);
+      break;
+    case 'scan':
+      // Rising holographic sweep with two high ticks — "going out to the web".
+      airSweep(g, t, 0.16, 2400, 7200, 0.2);
+      glass(g, 1567.98, t + 0.1, 0.12, 0.18, -0.2);
+      glass(g, 2093, t + 0.16, 0.18, 0.16, 0.2);
+      break;
+    case 'point':
+      // Flight swoosh, then the eShop-style octave leap G5 → G6 on arrival.
+      airSweep(g, t, 0.16, 1200, 4800, 0.2);
+      glass(g, 783.99, t + 0.1, 0.14, 0.28, 0);
+      glass(g, 1567.98, t + 0.16, 0.3, 0.26, 0.2);
       break;
   }
 }

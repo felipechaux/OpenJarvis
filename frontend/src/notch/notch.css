@@ -1,0 +1,192 @@
+/* Notch pill — see NotchPage.tsx.  The window is transparent and
+   click-through; only the black pill is visible, and it disappears into the
+   hardware notch when idle. */
+
+:root {
+  --notch-ink: #000;
+  --notch-accent: #5ee7ff;
+  --notch-think: #ffb54d;
+  --notch-text: rgba(255, 255, 255, 0.92);
+  --notch-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
+}
+
+html.notch-window,
+html.notch-window body,
+html.notch-window #root {
+  background: transparent !important;
+  margin: 0;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.notch {
+  position: fixed;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 190px;
+  height: 38px;
+  cursor: default;
+  background: var(--notch-ink);
+  border-radius: 0 0 14px 14px;
+  opacity: 1;
+  box-sizing: border-box;
+  padding: 0 14px;
+  overflow: hidden;
+  font: 500 12.5px/1.2 -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+  color: var(--notch-text);
+  transition:
+    width 0.45s var(--notch-spring),
+    height 0.45s var(--notch-spring),
+    border-radius 0.45s var(--notch-spring),
+    opacity 0.25s ease;
+}
+
+/* Idle: clearly wider and a little taller than the hardware notch (about
+   200×32 pt), so the core and bars show on each side of it. */
+.notch--idle {
+  width: 290px;
+  height: 38px;
+  border-radius: 0 0 16px 16px;
+}
+.notch--idle .notch__core {
+  width: 8px;
+  height: 8px;
+  opacity: 0.7;
+  box-shadow: 0 0 6px var(--notch-accent);
+  animation: notch-breathe 3.2s ease-in-out infinite;
+}
+.notch--idle .notch__bars i {
+  opacity: 0.4;
+}
+
+.notch:not(.notch--idle) {
+  width: 360px;
+  border-radius: 0 0 22px 22px;
+}
+.notch.notch--text:not(.notch--idle) {
+  height: 64px;
+}
+.notch--speaking.notch--text {
+  width: 420px;
+}
+
+/* Top row sits beside the hardware notch: core on the left, bars on the right. */
+.notch__row {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.notch__core {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--notch-accent);
+  box-shadow: 0 0 10px var(--notch-accent);
+  transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+.notch--listening .notch__core {
+  animation: notch-breathe 1.2s ease-in-out infinite;
+}
+.notch--thinking .notch__core {
+  background: var(--notch-think);
+  box-shadow: 0 0 10px var(--notch-think);
+  animation: notch-breathe 0.7s ease-in-out infinite;
+}
+
+.notch__bars {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+}
+.notch__bars i {
+  width: 3px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--notch-accent);
+  opacity: 0.35;
+}
+.notch--listening .notch__bars i,
+.notch--speaking .notch__bars i {
+  opacity: 1;
+  animation: notch-wave 0.9s ease-in-out infinite;
+}
+.notch--thinking .notch__bars i {
+  background: var(--notch-think);
+  opacity: 1;
+  animation: notch-dots 1s ease-in-out infinite;
+}
+
+.notch__line {
+  height: 22px;
+  line-height: 22px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 0.25s ease 0.12s, transform 0.3s ease 0.12s;
+}
+.notch--text:not(.notch--idle) .notch__line {
+  opacity: 1;
+  transform: none;
+}
+
+/* Clicked open: a bigger card with status and the last reply. */
+.notch.notch--open {
+  width: 520px;
+  height: auto;
+  max-height: 230px;
+  border-radius: 0 0 26px 26px;
+  padding-bottom: 14px;
+}
+.notch__panel {
+  padding: 2px 6px 0;
+  animation: notch-reveal 0.3s ease 0.08s both;
+}
+.notch__status {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--notch-accent);
+  margin-bottom: 6px;
+}
+.notch--thinking .notch__status {
+  color: var(--notch-think);
+}
+.notch__reply {
+  font-size: 13.5px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 7;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+@keyframes notch-reveal {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+@keyframes notch-breathe {
+  50% { transform: scale(0.7); opacity: 0.6; }
+}
+@keyframes notch-wave {
+  0%, 100% { height: 4px; }
+  50% { height: 16px; }
+}
+@keyframes notch-dots {
+  0%, 100% { height: 4px; opacity: 0.4; }
+  50% { height: 7px; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notch,
+  .notch * {
+    animation: none !important;
+    transition-duration: 0.01s !important;
+  }
+}

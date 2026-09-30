@@ -32,7 +32,13 @@ applyTheme();
 // Fetch the API base URL from the Tauri backend before rendering.
 // This ensures JARVIS_PORT is defined in one place (the Rust backend).
 // In non-Tauri environments this is a no-op.
-initApiBase().finally(() => {
+// The notch window (src-tauri `notch` mod) renders only the pill: no App,
+// so no second microphone, wake word or chime pipeline.
+if (window.location.pathname.replace(/\/$/, '').endsWith('/notch')) {
+  import('./notch/NotchPage').then(({ NotchPage }) => {
+    createRoot(document.getElementById('root')!).render(<NotchPage />);
+  });
+} else initApiBase().finally(() => {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <ErrorBoundary>

@@ -3,8 +3,11 @@ import { getBase } from '../lib/api';
 import { useAppStore } from '../lib/store';
 import { useTTS } from './useTTS';
 import { presenceOf } from './usePresence';
+import { playEarcon } from '../lib/earcons';
 
 const POLL_MS = 4000;
+// Let the session chime ring out before the voice starts.
+const SESSION_CHIME_MS = 550;
 
 interface SessionEvent {
   id: number;
@@ -74,6 +77,10 @@ export function useSessionAnnouncements(enabled: boolean) {
       if (!state.settings.ttsEnabled) return;
       announcing = true;
       try {
+        if (state.settings.earcons) {
+          playEarcon('session');
+          await new Promise((r) => setTimeout(r, SESSION_CHIME_MS));
+        }
         await speak(event.text);
         // Tell the backend it was spoken (delivery can then be verified).
         fetch(`${getBase()}/v1/coding-sessions/events/${event.id}/announced`, {

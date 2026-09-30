@@ -1576,6 +1576,185 @@ async fn speech_health(api_url: String) -> Result<serde_json::Value, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Notch presence — a click-through transparent window hugging the top-centre
+// of the primary display (the MacBook notch).  It renders /notch, which draws
+// a Dynamic-Island-style pill that grows out of the notch while JARVIS
+// listens, thinks or speaks.  The main window drives it with `notch:state`
+// events; this window never takes focus or clicks.
+// ---------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+mod notch {
+    use objc::{msg_send, sel, sel_impl};
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::time::{Duration, Instant};
+    use tauri::{LogicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+    pub const LABEL: &str = "notch";
+    /// Room for the expanded pill; the page draws inside it.
+    const WIDTH: f64 = 560.0;
+    const HEIGHT: f64 = 240.0;
+    /// Above the menu bar (NSMainMenuWindowLevel = 24, status items = 25).
+    const LEVEL: i64 = 27;
+    /// canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
+    const BEHAVIOR: u64 = 1 | 16 | 64 | 256;
+    /// How often to follow display changes (monitor plugged in / removed).
+    const FOLLOW_EVERY: Duration = Duration::from_secs(3);
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGSize {
+        width: f64,
+        height: f64,
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGRect {
+        origin: CGPoint,
+        size: CGSize,
+    }
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGGetActiveDisplayList(max: u32, displays: *mut u32, count: *mut u32) -> i32;
+        fn CGDisplayIsBuiltin(display: u32) -> i32;
+        fn CGMainDisplayID() -> u32;
+        fn CGDisplayBounds(display: u32) -> CGRect;
+        fn CGEventCreate(source: *const std::ffi::c_void) -> *mut std::ffi::c_void;
+        fn CGEventGetLocation(event: *mut std::ffi::c_void) -> CGPoint;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const std::ffi::c_void);
+    }
+
+    /// Size of the pill as drawn (points), reported by the page; the window
+    /// takes clicks only while the cursor is over it.  Stored as f32 bits.
+    static HIT_W: AtomicU32 = AtomicU32::new(0);
+    static HIT_H: AtomicU32 = AtomicU32::new(0);
+    const TRACK_EVERY: Duration = Duration::from_millis(60);
+
+    pub fn set_hit_area(width: f64, height: f64) {
+        HIT_W.store((width as f32).to_bits(), Ordering::Relaxed);
+        HIT_H.store((height as f32).to_bits(), Ordering::Relaxed);
+    }
+
+    /// Global cursor position, top-left origin (same space as CGDisplayBounds).
+    fn cursor() -> Option<CGPoint> {
+        unsafe {
+            let ev = CGEventCreate(std::ptr::null());
+            if ev.is_null() {
+                return None;
+            }
+            let p = CGEventGetLocation(ev);
+            CFRelease(ev);
+            Some(p)
+        }
+    }
+
+    /// Top-left of the pill window: centred on the built-in display (the one
+    /// with the notch) when it is active, else on the main display.  Global
+    /// display coordinates are points from the main display's top-left, the
+    /// same space as Tauri logical positions.
+    fn target() -> (f64, f64) {
+        unsafe {
+            let mut ids = [0u32; 16];
+            let mut count = 0u32;
+            let mut display = CGMainDisplayID();
+            if CGGetActiveDisplayList(ids.len() as u32, ids.as_mut_ptr(), &mut count) == 0 {
+                if let Some(id) = ids[..count as usize]
+                    .iter()
+                    .copied()
+                    .find(|&id| CGDisplayIsBuiltin(id) != 0)
+                {
+                    display = id;
+                }
+            }
+            let b = CGDisplayBounds(display);
+            (b.origin.x + (b.size.width - WIDTH) / 2.0, b.origin.y)
+        }
+    }
+
+    fn place(win: &WebviewWindow, (x, y): (f64, f64)) {
+        let _ = win.set_position(LogicalPosition::new(x, y));
+    }
+
+    pub fn create(app: &tauri::App) -> tauri::Result<()> {
+        let at = target();
+        let win = WebviewWindowBuilder::new(app, LABEL, WebviewUrl::App("notch".into()))
+            .title("JARVIS notch")
+            .inner_size(WIDTH, HEIGHT)
+            .position(at.0, at.1)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .resizable(false)
+            .always_on_top(true)
+            .visible_on_all_workspaces(true)
+            .skip_taskbar(true)
+            .focused(false)
+            .accept_first_mouse(false)
+            .build()?;
+        win.set_ignore_cursor_events(true)?;
+        place(&win, at);
+
+        if let Ok(ns) = win.ns_window() {
+            let ns = ns as *mut objc::runtime::Object;
+            unsafe {
+                let _: () = msg_send![ns, setLevel: LEVEL];
+                let _: () = msg_send![ns, setCollectionBehavior: BEHAVIOR];
+                let _: () = msg_send![ns, setHasShadow: false];
+            }
+        }
+
+        // Follow the notch display when monitors are plugged in or removed,
+        // and let clicks through everywhere except over the drawn pill.
+        std::thread::spawn(move || {
+            let mut last = at;
+            let mut followed = Instant::now();
+            let mut clickable = false;
+            loop {
+                std::thread::sleep(TRACK_EVERY);
+                if followed.elapsed() >= FOLLOW_EVERY {
+                    followed = Instant::now();
+                    let now = target();
+                    if (now.0 - last.0).abs() > 0.5 || (now.1 - last.1).abs() > 0.5 {
+                        place(&win, now);
+                        last = now;
+                    }
+                }
+                let w = f32::from_bits(HIT_W.load(Ordering::Relaxed)) as f64;
+                let h = f32::from_bits(HIT_H.load(Ordering::Relaxed)) as f64;
+                let over = cursor().is_some_and(|p| {
+                    let left = last.0 + (WIDTH - w) / 2.0;
+                    p.x >= left && p.x <= left + w && p.y >= last.1 && p.y <= last.1 + h
+                });
+                if over != clickable {
+                    clickable = over;
+                    let _ = win.set_ignore_cursor_events(!over);
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
+/// The notch page reports the pill's drawn size so only it takes clicks.
+#[tauri::command]
+fn notch_hit_area(width: f64, height: f64) {
+    #[cfg(target_os = "macos")]
+    notch::set_hit_area(width, height);
+    #[cfg(not(target_os = "macos"))]
+    let _ = (width, height);
+}
+
+// ---------------------------------------------------------------------------
 // Native macOS overlay — NSPanel + WKWebView, entirely bypassing Tauri's
 // window management so we get proper always-on-top, transparency, non-
 // activating panel behaviour and cross-Space support.
@@ -2047,6 +2226,12 @@ pub fn run() {
                 native_overlay::create(include_str!("overlay.html"), JARVIS_PORT);
             }
 
+            // Notch presence pill (driven by the main window).
+            #[cfg(target_os = "macos")]
+            if let Err(e) = notch::create(app) {
+                eprintln!("[notch] could not create the notch window: {e}");
+            }
+
             // Register Cmd+Shift+Space to toggle the overlay
             {
                 use tauri_plugin_global_shortcut::{
@@ -2083,6 +2268,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            notch_hit_area,
             get_setup_status,
             get_api_base,
             wake_ready,

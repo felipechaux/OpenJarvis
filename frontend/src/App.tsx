@@ -17,7 +17,8 @@ import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } fr
 import { OptInModal } from './components/OptInModal';
 import { useWakeWord } from './hooks/useWakeWord';
 import { useCompanionMode } from './hooks/useCompanionMode';
-import { useEarcons } from './hooks/useEarcons';
+import { useEarcons, useInteractionEarcons } from './hooks/useEarcons';
+import { useNotchBridge } from './hooks/useNotchBridge';
 import { useSessionAnnouncements } from './hooks/useSessionAnnouncements';
 import { useChatIndexing } from './hooks/useChatIndexing';
 
@@ -180,6 +181,8 @@ export default function App() {
   useWakeWord(setupDone && speechEnabled);
   useCompanionMode({ registerShortcut: setupDone });
   useEarcons();
+  useInteractionEarcons();
+  useNotchBridge();
   useSessionAnnouncements(setupDone);
   useChatIndexing(setupDone);
 
