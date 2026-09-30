@@ -89,6 +89,12 @@ def _alias_for(model: str) -> str:
     return "" if alias in ("", "default") else alias
 
 
+# The fast tier (chat, the daily briefing) answers without extended
+# thinking: on Haiku it multiplied output tokens (the briefing spent ~70 s
+# writing ~9.8k tokens for a ~700-token reply).  Stronger models keep it.
+_NO_THINKING_ALIASES = frozenset({"haiku"})
+
+
 @EngineRegistry.register("claude_cli")
 class ClaudeCLIEngine(InferenceEngine):
     """Inference via the local Claude Code CLI (``claude -p``)."""
@@ -167,10 +173,12 @@ class ClaudeCLIEngine(InferenceEngine):
         return cmd
 
     @staticmethod
-    def _child_env() -> Dict[str, str]:
+    def _child_env(model: str = "") -> Dict[str, str]:
         env = {k: v for k, v in os.environ.items() if k not in _STRIP_ENV_VARS}
         if os.environ.get("OPENJARVIS_CLAUDE_CLI_USE_API_KEY") != "1":
             env.pop("ANTHROPIC_API_KEY", None)
+        if _alias_for(model) in _NO_THINKING_ALIASES:
+            env.setdefault("MAX_THINKING_TOKENS", "0")
         return env
 
     @staticmethod
@@ -213,7 +221,7 @@ class ClaudeCLIEngine(InferenceEngine):
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
-                env=self._child_env(),
+                env=self._child_env(model),
                 cwd=self._cwd,
             )
         except subprocess.TimeoutExpired as exc:
@@ -264,7 +272,7 @@ class ClaudeCLIEngine(InferenceEngine):
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=self._child_env(),
+            env=self._child_env(model),
             cwd=self._cwd,
             limit=16 * 1024 * 1024,
         )
@@ -368,7 +376,7 @@ class ClaudeCLIEngine(InferenceEngine):
                 capture_output=True,
                 text=True,
                 timeout=self._timeout,
-                env=self._child_env(),
+                env=self._child_env(model),
                 cwd=self._cwd,
             )
         except subprocess.TimeoutExpired as exc:

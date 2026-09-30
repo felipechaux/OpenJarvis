@@ -211,3 +211,14 @@ def test_safeguard_fallback_model():
     assert _safeguard_fallback_model("claude-cli/opus", refusal) == "claude-cli/sonnet"
     assert _safeguard_fallback_model("claude-cli/sonnet", refusal) is None
     assert _safeguard_fallback_model("claude-cli/opus", "rate limited") is None
+
+
+def test_fast_tier_runs_without_extended_thinking(monkeypatch):
+    from openjarvis.engine.claude_cli import ClaudeCLIEngine
+
+    monkeypatch.delenv("MAX_THINKING_TOKENS", raising=False)
+    assert ClaudeCLIEngine._child_env("claude-cli/haiku")["MAX_THINKING_TOKENS"] == "0"
+    assert "MAX_THINKING_TOKENS" not in ClaudeCLIEngine._child_env("claude-cli/opus")
+    assert "MAX_THINKING_TOKENS" not in ClaudeCLIEngine._child_env()
+    monkeypatch.setenv("MAX_THINKING_TOKENS", "2048")
+    assert ClaudeCLIEngine._child_env("claude-cli/haiku")["MAX_THINKING_TOKENS"] == "2048"
