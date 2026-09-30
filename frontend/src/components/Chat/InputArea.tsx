@@ -9,6 +9,8 @@ import { useTTS, isLikelySelfEcho } from '../../hooks/useTTS';
 import { WAKE_EVENT, INTERRUPT_EVENT, markCommandSent } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
+// model_switch reports the model that answers now as "(claude-cli/haiku)".
+const ACTIVE_MODEL_RE = /\(((?:claude-cli|antigravity|gemini-cli)\/[^)\s]+)\)/;
 // Tools that take minutes: spoken up front so the wait is not silent.
 const SLOW_TOOL_ACKS: Record<string, string> = {
   browser_task: 'Voy al navegador, señor; esto puede tardar un par de minutos.',
@@ -213,6 +215,7 @@ export function InputArea() {
     // Models that actually answered (tiered routing may pick Haiku for an
     // Opus selection, or escalate mid-turn); read from inference_end.
     const modelsUsed: string[] = [];
+    let switchedTo = '';
     let lastFlush = 0;
     let ttftMs: number | undefined;
 
@@ -299,6 +302,15 @@ export function InputArea() {
               tc.latency = data.latency;
               tc.result = data.result;
             }
+            // "usa Gemini" / "vuelve a Claude": show the model that will now
+            // answer, which model_switch names as "(provider/model)".
+            if (data.tool === 'model_switch' && typeof data.result === 'string') {
+              const next = data.result.match(ACTIVE_MODEL_RE)?.[1];
+              if (next) {
+                switchedTo = next;
+                useAppStore.getState().setActiveModel(next);
+              }
+            }
             setStreamState({
               phase: 'Generating...',
               activeToolCalls: [...toolCalls],
@@ -365,7 +377,7 @@ export function InputArea() {
         : toolCalls.length
           ? 'atajo (sin modelo)'
           : selectedModel;
-      if (!modelsUsed.length && toolCalls.length) {
+      if (!modelsUsed.length && toolCalls.length && !switchedTo) {
         useAppStore.getState().setActiveModel(modelLabel);
       }
       const answeredBy = modelsUsed[modelsUsed.length - 1] || selectedModel;
