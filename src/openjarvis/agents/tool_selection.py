@@ -63,6 +63,14 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"modelo|model|claude|gemini|antigravity|cuota|quota|l[ií]mite"
             r"|proveedor|provider"
         ),
+        "browser_task": (
+            r"navega|navegador|browser|chrome|busca|search|web|internet|p[aá]gina"
+            r"|sitio|precio|vuelo|reserva|gmail|github|compara|google|en l[ií]nea"
+        ),
+        "look_at_screen": (
+            r"pantalla|screen|\bves\b|\bmira\b|\besto\b|\besta\b|aqu[ií]"
+            r"|abierto|ventana|window|error|see\b|look"
+        ),
         "get_weather": (
             r"clima|el tiempo|temperatura|llov|lluvia|pron[oó]stico|weather"
             r"|forecast|fr[ií]o|calor|paraguas"

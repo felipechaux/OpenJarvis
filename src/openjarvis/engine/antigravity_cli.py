@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from openjarvis.core.registry import EngineRegistry
-from openjarvis.core.types import Message
+from openjarvis.core.types import Message, Role
 from openjarvis.engine._base import InferenceEngine, estimate_prompt_tokens
 from openjarvis.engine.gemini_cli import GeminiCLIEngine
 
@@ -267,6 +267,21 @@ class AntigravityCLIEngine(InferenceEngine):
             raise RuntimeError(
                 f"Antigravity CLI failed: {explain_error(stderr, error)}"
             )
+
+    def describe_image(self, image: Path, prompt: str, *, model: str) -> str:
+        """Answer *prompt* about an image: agy reads it from its workspace."""
+        self._prepare()
+        name = f"jarvis-image{image.suffix.lower() or '.jpg'}"
+        target = Path(self._cwd) / name
+        shutil.copyfile(image, target)
+        try:
+            messages = [Message(
+                role=Role.USER,
+                content=f"Look at the image file {name} in this directory. {prompt}",
+            )]
+            return self.generate(messages, model=model)["content"]
+        finally:
+            target.unlink(missing_ok=True)
 
     def list_models(self) -> List[str]:
         global _models_cache

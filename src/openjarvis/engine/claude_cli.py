@@ -336,6 +336,60 @@ class ClaudeCLIEngine(InferenceEngine):
                 f"Claude CLI failed (exit {proc.returncode}): {stderr.strip()[:500]}"
             )
 
+    def describe_image(self, image: Path, prompt: str, *, model: str) -> str:
+        """Answer *prompt* about a JPEG/PNG, via ``--input-format stream-json``."""
+        import base64
+
+        media = "image/png" if image.suffix.lower() == ".png" else "image/jpeg"
+        message = {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media,
+                            "data": base64.b64encode(image.read_bytes()).decode(),
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            },
+        }
+        cmd = self._build_cmd(model, "", stream=True)
+        at = cmd.index("stream-json") + 1
+        cmd[at:at] = ["--input-format", "stream-json"]
+        try:
+            proc = subprocess.run(
+                cmd,
+                input=json.dumps(message) + "\n",
+                capture_output=True,
+                text=True,
+                timeout=self._timeout,
+                env=self._child_env(),
+                cwd=self._cwd,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"Claude CLI timed out after {self._timeout:.0f}s"
+            ) from exc
+        for line in reversed(proc.stdout.splitlines()):
+            try:
+                evt = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if evt.get("type") == "result":
+                text = evt.get("result") or ""
+                if evt.get("is_error"):
+                    raise RuntimeError(f"Claude CLI error: {text or evt.get('subtype')}")
+                return text
+        raise RuntimeError(
+            f"Claude CLI failed (exit {proc.returncode}): "
+            f"{(proc.stderr or proc.stdout).strip()[:500]}"
+        )
+
     def list_models(self) -> List[str]:
         return list(CLAUDE_CLI_MODELS) if self._bin else []
 

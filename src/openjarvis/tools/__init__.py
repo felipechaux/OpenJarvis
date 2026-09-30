@@ -147,6 +147,16 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.screen  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.browser_task  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
 except ImportError:
     pass

@@ -288,7 +288,30 @@ def _match_model_switch(text: str) -> Optional[FastPath]:
     return None
 
 
+# ── look_at_screen ─────────────────────────────────────────────────────────
+
+_SCREEN = r"(?:mi\s+|la\s+)?(?:pantalla|screen)"
+_LOOK_AT_SCREEN_RE = re.compile(
+    rf"^(?:qu[eé]\s+ves(?:\s+en\s+{_SCREEN})?"
+    rf"|mira\s+{_SCREEN}|qu[eé]\s+hay\s+en\s+{_SCREEN}"
+    rf"|describe\s+{_SCREEN}|qu[eé]\s+estoy\s+viendo"
+    rf"|what\s+do\s+you\s+see(?:\s+on\s+my\s+screen)?|look\s+at\s+my\s+screen)$",
+    re.IGNORECASE,
+)
+
+
+def _screen_reply(result: ToolResult) -> Optional[str]:
+    return (result.content or None) if result.success else None
+
+
+def _match_look_at_screen(text: str) -> Optional[FastPath]:
+    if _LOOK_AT_SCREEN_RE.match(text):
+        return FastPath("look_at_screen", {}, _screen_reply)
+    return None
+
+
 _MATCHERS = (
+    _match_look_at_screen,
     _match_model_switch,
     _match_spotify,
     _match_weather,
