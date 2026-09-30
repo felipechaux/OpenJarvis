@@ -1,12 +1,15 @@
 /* Notch pill — see NotchPage.tsx.  The window is transparent and
    click-through; only the black pill is visible, and it disappears into the
-   hardware notch when idle. */
+   hardware notch when idle.  The reactor is companion mode's ArcReactor
+   (styles in index.css), scaled down. */
 
 :root {
   --notch-ink: #000;
   --notch-accent: #5ee7ff;
   --notch-think: #ffb54d;
   --notch-text: rgba(255, 255, 255, 0.92);
+  --notch-muted: rgba(255, 255, 255, 0.55);
+  --notch-rule: rgba(94, 231, 255, 0.14);
   --notch-spring: cubic-bezier(0.34, 1.36, 0.64, 1);
 }
 
@@ -25,12 +28,10 @@ html.notch-window #root {
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 190px;
-  height: 38px;
+  width: 360px;
   cursor: default;
   background: var(--notch-ink);
-  border-radius: 0 0 14px 14px;
-  opacity: 1;
+  border-radius: 0 0 22px 22px;
   box-sizing: border-box;
   padding: 0 14px;
   overflow: hidden;
@@ -40,39 +41,26 @@ html.notch-window #root {
     width 0.45s var(--notch-spring),
     height 0.45s var(--notch-spring),
     border-radius 0.45s var(--notch-spring),
-    opacity 0.25s ease;
+    box-shadow 0.4s ease;
+}
+.notch:not(.notch--idle) {
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35), 0 0 18px rgba(0, 212, 255, 0.06);
 }
 
-/* Idle: clearly wider and a little taller than the hardware notch (about
-   200×32 pt), so the core and bars show on each side of it. */
+/* Idle: clearly wider than the hardware notch (about 200×32 pt), so the
+   reactor and bars show on each side of it. */
 .notch--idle {
   width: 290px;
-  height: 38px;
   border-radius: 0 0 16px 16px;
-}
-.notch--idle .notch__core {
-  width: 8px;
-  height: 8px;
-  opacity: 0.7;
-  box-shadow: 0 0 6px var(--notch-accent);
-  animation: notch-breathe 3.2s ease-in-out infinite;
 }
 .notch--idle .notch__bars i {
   opacity: 0.4;
 }
-
-.notch:not(.notch--idle) {
-  width: 360px;
-  border-radius: 0 0 22px 22px;
-}
-.notch.notch--text:not(.notch--idle) {
-  height: 64px;
-}
 .notch--speaking.notch--text {
-  width: 420px;
+  width: 440px;
 }
 
-/* Top row sits beside the hardware notch: core on the left, bars on the right. */
+/* ── Top row: reactor left of the hardware notch, bars right of it ── */
 .notch__row {
   height: 38px;
   display: flex;
@@ -80,21 +68,25 @@ html.notch-window #root {
   justify-content: space-between;
 }
 
-.notch__core {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--notch-accent);
-  box-shadow: 0 0 10px var(--notch-accent);
-  transition: background 0.3s ease, box-shadow 0.3s ease;
+.notch__reactor {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  margin-left: -4px;
+  transition: opacity 0.25s ease, transform 0.45s var(--notch-spring);
 }
-.notch--listening .notch__core {
-  animation: notch-breathe 1.2s ease-in-out infinite;
+.notch--idle .notch__reactor {
+  opacity: 0.8;
+  transform: scale(0.86);
 }
-.notch--thinking .notch__core {
-  background: var(--notch-think);
-  box-shadow: 0 0 10px var(--notch-think);
-  animation: notch-breathe 0.7s ease-in-out infinite;
+/* Open: the big reactor in the panel takes over. */
+.notch--open .notch__reactor {
+  opacity: 0;
+  transform: scale(0.5);
+}
+/* Thinking: the reactor warms to amber, like the pill's other accents. */
+.notch--thinking .arc-reactor {
+  filter: hue-rotate(-155deg) saturate(1.3);
 }
 
 .notch__bars {
@@ -121,58 +113,134 @@ html.notch-window #root {
   animation: notch-dots 1s ease-in-out infinite;
 }
 
+/* ── Collapsed status line: up to three lines, gliding to the newest words ── */
+.notch__body {
+  padding-bottom: 12px;
+}
 .notch__line {
-  height: 22px;
-  line-height: 22px;
+  max-height: calc(3 * 17px);
+  line-height: 17px;
+  font-size: 13px;
   text-align: center;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  text-wrap: balance;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 0 8px;
   opacity: 0;
   transform: translateY(-4px);
   transition: opacity 0.25s ease 0.12s, transform 0.3s ease 0.12s;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 7px, #000 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 7px, #000 100%);
+}
+.notch__line::-webkit-scrollbar {
+  display: none;
 }
 .notch--text:not(.notch--idle) .notch__line {
   opacity: 1;
   transform: none;
 }
+.notch--thinking .notch__line {
+  color: var(--notch-muted);
+}
 
-/* Clicked open: a bigger card with status and the last reply. */
+/* ── Clicked open: reactor header and the last reply, scrollable ── */
 .notch.notch--open {
   width: 520px;
-  height: auto;
-  max-height: 230px;
-  border-radius: 0 0 26px 26px;
-  padding-bottom: 14px;
+  border-radius: 0 0 28px 28px;
 }
 .notch__panel {
-  padding: 2px 6px 0;
-  animation: notch-reveal 0.3s ease 0.08s both;
+  padding: 0 4px;
+  animation: notch-reveal 0.32s ease 0.08s both;
+}
+.notch__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: -6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--notch-rule);
+}
+/* The reactor keeps its full circle whatever the titles need. */
+.notch__head > .arc-reactor {
+  flex-shrink: 0;
+}
+.notch__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.notch__brand {
+  font-family: var(--font-hud, -apple-system, sans-serif);
+  font-size: 10.5px;
+  letter-spacing: 0.32em;
+  color: var(--notch-muted);
 }
 .notch__status {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--notch-accent);
-  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .notch--thinking .notch__status {
   color: var(--notch-think);
 }
+
 .notch__reply {
+  position: relative; /* offsetParent for the spoken-sentence scroll */
+  max-height: 236px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin-top: 2px;
+  padding: 10px 8px 6px 2px;
   font-size: 13.5px;
-  line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 7;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  line-height: 1.5;
+  white-space: pre-line;
+  color: var(--notch-text);
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+  /* Fade the edges so scrolled text dissolves instead of being cut. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 12px, #000 calc(100% - 18px), transparent 100%);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(94, 231, 255, 0.35) transparent;
+}
+.notch__reply::-webkit-scrollbar {
+  width: 4px;
+}
+.notch__reply::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 12px 0 18px;
+}
+.notch__reply::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: rgba(94, 231, 255, 0.3);
+}
+.notch__reply:hover::-webkit-scrollbar-thumb {
+  background: rgba(94, 231, 255, 0.55);
+}
+/* The sentence being spoken right now. */
+.notch__reply mark {
+  color: #fff;
+  background: rgba(94, 231, 255, 0.14);
+  border-radius: 4px;
+  padding: 1px 2px;
+  margin: 0 -2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  box-shadow: 0 0 12px rgba(94, 231, 255, 0.12);
+  transition: background 0.3s ease;
+}
+.notch__reply::selection {
+  background: rgba(94, 231, 255, 0.3);
 }
 
 @keyframes notch-reveal {
   from { opacity: 0; transform: translateY(-6px); }
-}
-@keyframes notch-breathe {
-  50% { transform: scale(0.7); opacity: 0.6; }
 }
 @keyframes notch-wave {
   0%, 100% { height: 4px; }

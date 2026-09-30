@@ -1593,7 +1593,7 @@ mod notch {
     pub const LABEL: &str = "notch";
     /// Room for the expanded pill; the page draws inside it.
     const WIDTH: f64 = 560.0;
-    const HEIGHT: f64 = 240.0;
+    const HEIGHT: f64 = 380.0;
     /// Above the menu bar (NSMainMenuWindowLevel = 24, status items = 25).
     const LEVEL: i64 = 27;
     /// canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
