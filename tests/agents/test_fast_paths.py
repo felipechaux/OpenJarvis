@@ -102,3 +102,54 @@ def test_agent_answers_without_calling_the_model():
     result = agent.run("¿qué tiempo hace?")
     assert result.content == "En Bogotá está nublado, a 15 °C, señor."
     engine.generate.assert_not_called()
+
+
+def test_briefing_prefetch_only_for_the_marker():
+    from openjarvis.agents.fast_paths import briefing_prefetch
+
+    tools = {"get_weather", "digest_collect"}
+    calls = briefing_prefetch("JARVIS_WELCOME_TRIGGER: DEBES llamar…", tools)
+    assert [name for name, _ in calls] == ["get_weather", "digest_collect"]
+    assert briefing_prefetch("dame el resumen de hoy", tools) == []
+    assert [n for n, _ in briefing_prefetch("JARVIS_WELCOME_TRIGGER", {"get_weather"})] == [
+        "get_weather"
+    ]
+
+
+def test_briefing_data_reaches_the_model_before_it_answers():
+    from openjarvis.agents.native_react import NativeReActAgent
+    from openjarvis.tools._stubs import BaseTool, ToolSpec
+
+    ran = []
+
+    def _tool(name, output):
+        class _T(BaseTool):
+            tool_id = name
+
+            @property
+            def spec(self):
+                return ToolSpec(name=name, description=name, parameters={})
+
+            def execute(self, **params):
+                ran.append((name, params))
+                return ToolResult(name, output, True)
+
+        return _T()
+
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    engine.generate.return_value = {"content": "Final Answer: Buenos días, señor.", "usage": {}}
+    agent = NativeReActAgent(
+        engine,
+        "claude-cli/haiku",
+        tools=[_tool("get_weather", "Bogotá: Cloudy +11°C"), _tool("digest_collect", "[gmail] Rappi")],
+        temperature=0.2,
+        max_tokens=64,
+    )
+    result = agent.run("JARVIS_WELCOME_TRIGGER: DEBES llamar a get_weather y digest_collect")
+    assert [name for name, _ in ran] == ["get_weather", "digest_collect"]
+    assert ran[1][1] == {"sources": ["gcalendar", "gmail"]}
+    assert result.content == "Buenos días, señor."
+    assert engine.generate.call_count == 1
+    sent = str(engine.generate.call_args)
+    assert "Observation: Bogotá: Cloudy +11°C" in sent and "Observation: [gmail] Rappi" in sent

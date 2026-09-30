@@ -45,7 +45,7 @@ _MEMORY_PATTERNS = re.compile(
 
 # The desktop app's daily briefing prompt: long, but it only asks for a
 # summary of tool output, which the fast model handles.
-_BRIEFING_MARKER = "JARVIS_WELCOME_TRIGGER"
+from openjarvis.agents.fast_paths import BRIEFING_MARKER as _BRIEFING_MARKER  # noqa: E402
 
 _STRONG_TIERS = frozenset({"moderate", "complex", "very_complex"})
 _LONG_QUERY_CHARS = 500

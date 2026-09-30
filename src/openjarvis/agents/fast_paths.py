@@ -320,6 +320,27 @@ _MATCHERS = (
 )
 
 
+# ── Daily briefing ─────────────────────────────────────────────────────────
+# The desktop app's once-a-day briefing prompt starts with this marker.  Its
+# data is always the same two tool calls, so they run before the model sees
+# the prompt: the fast model tended to call only the weather and then invent
+# a "reconnect Calendar/Gmail" excuse instead of calling digest_collect.
+
+BRIEFING_MARKER = "JARVIS_WELCOME_TRIGGER"
+
+_BRIEFING_CALLS: tuple[tuple[str, Dict[str, Any]], ...] = (
+    ("get_weather", {"location": "Bogotá", "units": "metric"}),
+    ("digest_collect", {"sources": ["gcalendar", "gmail"]}),
+)
+
+
+def briefing_prefetch(text: str, tool_names: set[str]) -> list[tuple[str, Dict[str, Any]]]:
+    """Tool calls to run before the model for a briefing prompt, else ``[]``."""
+    if not text.lstrip().startswith(BRIEFING_MARKER):
+        return []
+    return [(name, args) for name, args in _BRIEFING_CALLS if name in tool_names]
+
+
 def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
     """The fast path for *text*, or ``None`` when the model should handle it."""
     normalized = _normalize(text)
@@ -332,4 +353,4 @@ def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
     return None
 
 
-__all__ = ["FastPath", "match_fast_path"]
+__all__ = ["BRIEFING_MARKER", "FastPath", "briefing_prefetch", "match_fast_path"]

@@ -6,6 +6,7 @@ implementation, not an integration with an external project.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, List, Optional
@@ -595,6 +596,26 @@ class NativeReActAgent(ToolUsingAgent):
         # Session guard: once third-party text is in play, this turn may not
         # steer a coding session (see agents/session_guard.py).
         tainted = session_guard.has_injected_context(messages)
+
+        # The daily briefing's data is fetched up front, as if the model had
+        # already made the calls, so it only has to write the briefing.
+        from openjarvis.agents.fast_paths import briefing_prefetch
+
+        names = {t.spec.name for t in self._tools}
+        for i, (name, args) in enumerate(briefing_prefetch(input, names)):
+            arguments = json.dumps(args, ensure_ascii=False)
+            tool_result = self._executor.execute(
+                ToolCall(id=f"prefetch_{i}", name=name, arguments=arguments)
+            )
+            if session_guard.taints(name):
+                tainted = True
+            all_tool_results.append(tool_result)
+            messages.append(
+                Message(role=Role.ASSISTANT, content=f"Action: {name}\nAction Input: {arguments}")
+            )
+            messages.append(
+                Message(role=Role.USER, content=f"Observation: {tool_result.content}")
+            )
         total_usage: dict[str, int] = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
