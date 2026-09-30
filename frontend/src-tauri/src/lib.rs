@@ -896,6 +896,17 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         return;
     }
 
+    // Drain the server's stderr into a log file.  Nothing read the pipe
+    // after startup, so once its ~64 KB buffer filled (warnings, logging),
+    // every write in the server blocked and requests hung — JARVIS
+    // "sometimes didn't answer".
+    {
+        let mut mgr = backend.lock().await;
+        if let Some(stderr) = mgr.jarvis.as_mut().and_then(|h| h.child.stderr.take()) {
+            tokio::spawn(drain_server_stderr(stderr));
+        }
+    }
+
     {
         let mut s = status.lock().await;
         s.server_ready = true;
@@ -917,6 +928,32 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
                 }
             }
         });
+    }
+}
+
+/// Server log written by the desktop app (replaced on every launch).
+fn server_log_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    std::path::Path::new(&home).join(".openjarvis/logs/desktop-server.log")
+}
+
+/// Copy the server's stderr to [`server_log_path`] until it exits, keeping
+/// the pipe empty.  If the file cannot be opened the output is discarded,
+/// which still keeps the server from blocking.
+async fn drain_server_stderr(mut stderr: tokio::process::ChildStderr) {
+    use tokio::io::AsyncWriteExt;
+    let path = server_log_path();
+    if let Some(dir) = path.parent() {
+        let _ = tokio::fs::create_dir_all(dir).await;
+    }
+    match tokio::fs::File::create(&path).await {
+        Ok(mut file) => {
+            let _ = tokio::io::copy(&mut stderr, &mut file).await;
+            let _ = file.flush().await;
+        }
+        Err(_) => {
+            let _ = tokio::io::copy(&mut stderr, &mut tokio::io::sink()).await;
+        }
     }
 }
 

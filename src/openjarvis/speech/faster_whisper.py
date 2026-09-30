@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import warnings
 from typing import List, Optional
 
 from openjarvis.core.registry import SpeechRegistry
@@ -12,6 +13,13 @@ try:
     from faster_whisper import WhisperModel
 except ImportError:
     WhisperModel = None  # type: ignore[assignment, misc]
+
+# Silent wake-word clips make the mel filterbank matmul warn (divide by
+# zero / overflow) on every ~1 s detection call.  Harmless, but it flooded
+# the server's stderr.
+warnings.filterwarnings(
+    "ignore", category=RuntimeWarning, module=r"faster_whisper\.feature_extractor"
+)
 
 
 @SpeechRegistry.register("faster-whisper")
