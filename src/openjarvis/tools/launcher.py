@@ -488,9 +488,30 @@ def build_assistant_command(
             parts += ["--settings", shlex.quote(settings)]
         if task:
             parts.append(shlex.quote(task))
-    elif task:
-        parts += ["-i", shlex.quote(task)]
+    else:
+        if model:
+            parts += ["--model", shlex.quote(model)]
+        if task:
+            parts += ["-i", shlex.quote(task)]
     return " ".join(parts)
+
+
+def _antigravity_model(cfg: Any) -> str:
+    """Model for an Antigravity session: the configured one, else the first
+    strong backup served by Antigravity that has quota (see engine/quota)."""
+    explicit = getattr(cfg, "antigravity_model", "")
+    if isinstance(explicit, str) and explicit:
+        return explicit
+    try:
+        from openjarvis.core.config import load_config
+
+        backups = load_config().intelligence.strong_fallback_models or []
+    except Exception:
+        return ""
+    for model in backups:
+        if model.startswith("antigravity/") and quota.is_available(model):
+            return model.split("/", 1)[1]
+    return ""
 
 
 def build_session_command(
@@ -548,13 +569,15 @@ class StartCodingSessionTool(BaseTool):
                     },
                     "task": {
                         "type": "string",
-                        "description": "Optional first instruction the user gave.",
+                        "description": "Optional first instruction the user gave, "
+                        "in their own words (it is rewritten into a clear prompt).",
                     },
                 },
                 "required": ["project"],
             },
             category="system",
-            timeout_seconds=20.0,
+            # The prompt rewrite may run on a backup model (prompt_refiner).
+            timeout_seconds=75.0,
         )
 
     def execute(self, **params: Any) -> ToolResult:
@@ -572,8 +595,13 @@ class StartCodingSessionTool(BaseTool):
         # text, which must not be able to start a session without prompts.
         skip_perms = getattr(cfg, "dangerously_skip_permissions", False) is True
         claude_model = str(getattr(cfg, "claude_model", "") or "")
+        session_model = claude_model if cli == "claude" else _antigravity_model(cfg)
 
         task = str(params.get("task") or "").strip()
+        if task:
+            from openjarvis.tools.prompt_refiner import refine
+
+            task = refine(task, project=project.name, assistant=label) or task
         terminal = cfg.terminal or "Terminal"
         session_id = str(uuid.uuid4()) if cli == "claude" else ""
         tmux_name = ""
@@ -612,7 +640,7 @@ class StartCodingSessionTool(BaseTool):
                     session_id,
                     settings,
                     dangerously_skip_permissions=skip_perms,
-                    model=claude_model,
+                    model=session_model,
                 )
                 sc.new_session(tmux_name, project, command)
                 _run_in_terminal(terminal, sc.attach_command(tmux_name))
@@ -626,7 +654,7 @@ class StartCodingSessionTool(BaseTool):
                         task,
                         session_id,
                         dangerously_skip_permissions=skip_perms,
-                        model=claude_model,
+                        model=session_model,
                     ),
                 )
         except (subprocess.SubprocessError, OSError, RuntimeError) as exc:

@@ -50,6 +50,29 @@ class TestSendTool:
         typed.assert_called_once_with("jarvis-openjarvis", "corre los tests")
         assert "corre los tests" in res.content
 
+    def test_types_the_refined_prompt(self) -> None:
+        from openjarvis.tools import prompt_refiner
+
+        seen = {}
+
+        def fake_refine(message, **kw):
+            seen.update(kw)
+            return f"Objetivo: {message}.\n(Instrucción original del usuario: «{message}»)"
+
+        with (
+            patch.object(sc, "tmux_bin", return_value="/bin/tmux"),
+            patch.object(sc, "resolve_session", return_value=("jarvis-openjarvis", [])),
+            patch.object(sc, "type_message") as typed,
+            patch.object(sc, "capture_screen", return_value="✓ build ok"),
+            patch.object(sc.time, "sleep"),
+            patch.object(prompt_refiner, "refine", side_effect=fake_refine),
+        ):
+            res = self._run(project="openjarvis", message="arregla lo del login ahora")
+        sent = typed.call_args.args[1]
+        assert sent.startswith("Objetivo: arregla lo del login ahora.")
+        assert seen["screen"] == "✓ build ok" and seen["assistant"] == "Claude Code"
+        assert "Objetivo:" in res.content  # JARVIS can tell the user what was sent
+
     def test_approve_presses_one(self) -> None:
         with (
             patch.object(sc, "tmux_bin", return_value="/bin/tmux"),

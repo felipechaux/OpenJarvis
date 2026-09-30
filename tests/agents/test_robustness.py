@@ -130,7 +130,9 @@ def _fresh_quota():
 
 
 def _chain(monkeypatch, *models):
-    monkeypatch.setattr(NativeReActAgent, "_fallback_chain", staticmethod(lambda: list(models)))
+    monkeypatch.setattr(
+        NativeReActAgent, "_fallback_chain", classmethod(lambda cls, strong=False: list(models))
+    )
 
 
 def test_failed_provider_falls_back_and_rebuilds_prompt(monkeypatch):
@@ -222,3 +224,44 @@ def test_tools_stay_usable_across_many_turns():
         ]
         agent.run(f"busca {i}")
     assert len(search.calls) == 12
+
+
+class _Intel:
+    strong_model = "claude-cli/opus"
+    default_model = ""
+    fallback_model = ""
+    fallback_models = ["antigravity/flash"]
+    strong_fallback_models = ["antigravity/opus-4-6", "antigravity/pro"]
+
+
+def test_strong_turn_falls_back_to_a_strong_model_first(monkeypatch):
+    quota.clear()
+    monkeypatch.setattr(NativeReActAgent, "_intelligence", staticmethod(lambda: _Intel()))
+    quota.park("claude-cli/")
+    engine = MagicMock()
+    engine.generate.return_value = _response("Final Answer: hecho")
+    agent = NativeReActAgent(engine, "claude-cli/opus", tools=[])
+    agent.run("refactoriza el módulo de pagos")
+    assert engine.generate.call_args.kwargs["model"] == "antigravity/opus-4-6"
+    quota.clear()
+
+
+def test_fast_turn_keeps_the_fast_backups(monkeypatch):
+    monkeypatch.setattr(NativeReActAgent, "_intelligence", staticmethod(lambda: _Intel()))
+    assert NativeReActAgent._fallback_chain() == ["antigravity/flash"]
+    assert NativeReActAgent._fallback_chain(strong=True) == [
+        "antigravity/opus-4-6",
+        "antigravity/pro",
+        "antigravity/flash",
+    ]
+
+
+def test_escalation_goes_to_a_strong_backup_when_opus_is_parked(monkeypatch):
+    quota.clear()
+    monkeypatch.setattr(NativeReActAgent, "_intelligence", staticmethod(lambda: _Intel()))
+    quota.park("claude-cli/opus")
+    agent = NativeReActAgent(MagicMock(), "claude-cli/haiku", tools=[])
+    agent._escalation_model = "claude-cli/opus"
+    assert agent._can_escalate()
+    assert agent._escalation_model == "antigravity/opus-4-6"
+    quota.clear()

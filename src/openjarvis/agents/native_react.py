@@ -392,8 +392,21 @@ class NativeReActAgent(ToolUsingAgent):
         return result
 
     def _can_escalate(self) -> bool:
+        """Whether this turn may hand over to a stronger model.
+
+        When the escalation target is out of quota, the first available
+        strong backup (``strong_fallback_models``) becomes the target.
+        """
         target = self._escalation_model
-        return bool(target) and target != self._model and quota.is_available(target)
+        if not target or target == self._model:
+            return False
+        if quota.is_available(target):
+            return True
+        for backup in self._strong_backups():
+            if backup != self._model and quota.is_available(backup):
+                self._escalation_model = backup
+                return True
+        return False
 
     def _compose_system_prompt(
         self,
@@ -510,21 +523,47 @@ class NativeReActAgent(ToolUsingAgent):
         self._switch_model(messages, input, context, self._escalation_model)
 
     @staticmethod
-    def _fallback_chain() -> list[str]:
-        """The configured backup models, in the order they are tried."""
+    def _intelligence() -> Any:
         try:
             from openjarvis.core.config import load_config
-            intel = load_config().intelligence
+            return load_config().intelligence
         except Exception:
+            return None
+
+    @classmethod
+    def _strong_backups(cls) -> list[str]:
+        intel = cls._intelligence()
+        return [m for m in (getattr(intel, "strong_fallback_models", None) or []) if m]
+
+    @classmethod
+    def _is_strong(cls, model: str) -> bool:
+        """Whether *model* is the strong tier or one of its backups."""
+        intel = cls._intelligence()
+        if intel is None:
+            return False
+        strong = intel.strong_model or intel.default_model
+        return model == strong or model in cls._strong_backups()
+
+    @classmethod
+    def _fallback_chain(cls, strong: bool = False) -> list[str]:
+        """The configured backup models, in the order they are tried.
+
+        A strong-tier turn tries the strong backups first, so a hard task
+        does not drop to a fast model while a strong one is available.
+        """
+        intel = cls._intelligence()
+        if intel is None:
             return []
         chain = list(intel.fallback_models or [])
         if not chain and intel.fallback_model:
             chain = [intel.fallback_model]
-        return [m for m in chain if m]
+        if strong:
+            chain = cls._strong_backups() + chain
+        return list(dict.fromkeys(m for m in chain if m))
 
-    def _next_fallback(self, tried: set[str]) -> str:
+    def _next_fallback(self, tried: set[str], strong: bool = False) -> str:
         """First backup not tried this turn whose provider has quota, or ""."""
-        for model in self._fallback_chain():
+        for model in self._fallback_chain(strong):
             if model not in tried and model != self._model and quota.is_available(model):
                 return model
         return ""
@@ -566,7 +605,7 @@ class NativeReActAgent(ToolUsingAgent):
         tried: set[str] = set()
         notices: list[str] = []
         if not quota.is_available(self._model):
-            backup = self._next_fallback({self._model})
+            backup = self._next_fallback({self._model}, self._is_strong(self._model))
             if backup:
                 logger.info(
                     "native_react: %s on quota cooldown; using %s",
@@ -641,7 +680,7 @@ class NativeReActAgent(ToolUsingAgent):
                 if quota.is_quota_error(str(exc)):
                     until = quota.mark_exhausted(failed, str(exc))
                     notices.append(_quota_notice(failed, until))
-                fallback = self._next_fallback(tried)
+                fallback = self._next_fallback(tried, self._is_strong(failed))
                 if not fallback:
                     raise
                 logger.warning(

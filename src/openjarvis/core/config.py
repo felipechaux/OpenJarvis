@@ -565,6 +565,10 @@ class IntelligenceConfig:
     # the fast model can still hand the turn over with ``Action: escalate``.
     fast_model: str = ""
     strong_model: str = ""  # empty → default_model
+    # Backups for the strong tier (hard queries, escalations) when
+    # ``strong_model`` is out of quota or failing, tried before
+    # ``fallback_models`` — e.g. Opus via Antigravity, then Gemini Pro.
+    strong_fallback_models: List[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -840,6 +844,13 @@ class LauncherConfig:
     dangerously_skip_permissions: bool = False
     # ``--model`` for started Claude Code sessions ("" = the CLI's own default).
     claude_model: str = "opus"
+    # Rewrite spoken instructions into clear prompts before they reach a
+    # coding session (tools/prompt_refiner.py); the original is kept too.
+    refine_prompts: bool = True
+    # ``--model`` for started Antigravity sessions.  "" = the first available
+    # ``antigravity/…`` entry of ``[intelligence] strong_fallback_models``
+    # (coding sessions are the hard work), else agy's own default.
+    antigravity_model: str = ""
 
 
 @dataclass

@@ -255,6 +255,7 @@ class TestToolsExecution:
         with (
             patch("openjarvis.tools.launcher._launcher_config", return_value=cfg),
             patch("openjarvis.tools.session_control.antigravity_hooks_file"),
+            patch("openjarvis.tools.launcher._antigravity_model", return_value=""),
             patch(
                 "openjarvis.tools.launcher._agy_binary",
                 return_value="/Users/me/.local/bin/agy",
@@ -395,3 +396,28 @@ class TestSessionCommand:
         with patch("openjarvis.tools.launcher._gemini_binary", return_value="gemini"):
             assert build_session_command("gemini", tmp_path / "p").endswith("&& gemini")
 
+
+
+def test_antigravity_sessions_start_on_a_strong_model(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from openjarvis.engine import quota
+    from openjarvis.tools import launcher
+
+    quota.clear()
+    cmd = launcher.build_assistant_command(
+        "antigravity", tmp_path, "arregla el login", model="claude-opus-4-6-thinking"
+    )
+    assert "--model claude-opus-4-6-thinking" in cmd and cmd.endswith("-i 'arregla el login'")
+
+    intel = SimpleNamespace(
+        strong_fallback_models=["antigravity/claude-opus-4-6-thinking", "antigravity/gemini-3.1-pro-high"]
+    )
+    monkeypatch.setattr(
+        "openjarvis.core.config.load_config", lambda: SimpleNamespace(intelligence=intel)
+    )
+    assert launcher._antigravity_model(SimpleNamespace(antigravity_model="")) == "claude-opus-4-6-thinking"
+    assert launcher._antigravity_model(SimpleNamespace(antigravity_model="x")) == "x"
+    quota.park("antigravity/")
+    assert launcher._antigravity_model(SimpleNamespace(antigravity_model="")) == ""
+    quota.clear()
