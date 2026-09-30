@@ -611,6 +611,15 @@ def serve(
             target=_startup_sync, name="startup-connector-sync", daemon=True
         ).start()
 
+    # The desktop app asks for its daily briefing right after launch: start
+    # fetching its data now, while the launch intro plays.
+    try:
+        from openjarvis.agents import briefing_cache
+
+        briefing_cache.warm()
+    except Exception as exc:
+        logger.warning("Briefing warm-up failed: %s", exc)
+
     import uvicorn
 
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")

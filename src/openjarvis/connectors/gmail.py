@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import email.utils
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -169,6 +170,44 @@ def _parse_date(date_str: str) -> datetime:
 # ---------------------------------------------------------------------------
 
 
+# Message bodies fetched concurrently per batch in ``GmailConnector.sync``.
+_FETCH_BATCH = 10
+
+
+def _message_document(msg: Dict[str, Any]) -> Document:
+    """A Gmail message resource (``full`` format) as a :class:`Document`."""
+    msg_id: str = msg.get("id", "")
+    payload: Dict[str, Any] = msg.get("payload", {})
+    headers: List[Dict[str, str]] = payload.get("headers", [])
+
+    from_header = _extract_header(headers, "From")
+    subject = _extract_header(headers, "Subject")
+    date_str = _extract_header(headers, "Date")
+    to_header = _extract_header(headers, "To")
+
+    participants: List[str] = []
+    if from_header:
+        participants.append(from_header)
+    if to_header:
+        participants.append(to_header)
+
+    return Document(
+        doc_id=f"gmail:{msg_id}",
+        source="gmail",
+        doc_type="email",
+        content=_decode_body(payload),
+        title=subject,
+        author=from_header,
+        participants=participants,
+        timestamp=_parse_date(date_str),
+        thread_id=msg.get("threadId"),
+        metadata={
+            "message_id": msg_id,
+            "labels": msg.get("labelIds", []),
+        },
+    )
+
+
 @ConnectorRegistry.register("gmail")
 class GmailConnector(BaseConnector):
     """Connector that syncs emails from Gmail via the REST API.
@@ -256,61 +295,31 @@ class GmailConnector(BaseConnector):
         page_token: Optional[str] = cursor
         synced = 0
 
-        while True:
-            list_resp = _gmail_api_list_messages(
-                token, page_token=page_token, query=query
-            )
-            messages: List[Dict[str, Any]] = list_resp.get("messages", [])
-
-            for msg_stub in messages:
-                msg_id: str = msg_stub.get("id", "")
-                if not msg_id:
-                    continue
-
-                msg = _gmail_api_get_message(token, msg_id)
-                payload: Dict[str, Any] = msg.get("payload", {})
-                headers: List[Dict[str, str]] = payload.get("headers", [])
-
-                from_header = _extract_header(headers, "From")
-                subject = _extract_header(headers, "Subject")
-                date_str = _extract_header(headers, "Date")
-                to_header = _extract_header(headers, "To")
-
-                body = _decode_body(payload)
-                timestamp = _parse_date(date_str)
-
-                participants: List[str] = []
-                if from_header:
-                    participants.append(from_header)
-                if to_header:
-                    participants.append(to_header)
-
-                thread_id: Optional[str] = msg.get("threadId")
-
-                doc = Document(
-                    doc_id=f"gmail:{msg_id}",
-                    source="gmail",
-                    doc_type="email",
-                    content=body,
-                    title=subject,
-                    author=from_header,
-                    participants=participants,
-                    timestamp=timestamp,
-                    thread_id=thread_id,
-                    metadata={
-                        "message_id": msg_id,
-                        "labels": msg.get("labelIds", []),
-                    },
+        # Messages are fetched in parallel batches (one request each): one by
+        # one, 40 messages took ~10 s.  Batches keep an early-stopping caller
+        # (digest_collect takes 40) from paying for a whole 100-message page.
+        with ThreadPoolExecutor(max_workers=_FETCH_BATCH) as pool:
+            while True:
+                list_resp = _gmail_api_list_messages(
+                    token, page_token=page_token, query=query
                 )
-                synced += 1
-                yield doc
+                ids = [m.get("id", "") for m in list_resp.get("messages", [])]
+                ids = [i for i in ids if i]
 
-            next_page: Optional[str] = list_resp.get("nextPageToken")
-            if not next_page:
-                self._last_cursor = None
-                break
-            page_token = next_page
-            self._last_cursor = next_page
+                for at in range(0, len(ids), _FETCH_BATCH):
+                    batch = ids[at : at + _FETCH_BATCH]
+                    for msg in pool.map(
+                        lambda msg_id: _gmail_api_get_message(token, msg_id), batch
+                    ):
+                        synced += 1
+                        yield _message_document(msg)
+
+                next_page: Optional[str] = list_resp.get("nextPageToken")
+                if not next_page:
+                    self._last_cursor = None
+                    break
+                page_token = next_page
+                self._last_cursor = next_page
 
         self._items_synced = synced
         self._last_sync = datetime.now()

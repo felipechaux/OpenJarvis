@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
@@ -498,26 +499,19 @@ class DigestCollectTool(BaseTool):
         errors: List[str] = []
         failed_sources: set = set()
 
-        for source in sources:
+        def fetch(source: str) -> tuple[List[Document] | None, str]:
+            """``(docs, "")`` or ``(None, error)`` for one connector."""
             if not ConnectorRegistry.contains(source):
-                errors.append(f"Connector '{source}' not available")
-                failed_sources.add(source)
-                continue
-
+                return None, f"Connector '{source}' not available"
             try:
-                connector_cls = ConnectorRegistry.get(source)
-                connector = connector_cls()
-
+                connector = ConnectorRegistry.get(source)()
                 if not connector.is_connected():
-                    errors.append(
+                    return None, (
                         f"Connector '{source}' not connected: credentials are "
                         "missing or the authorization expired. The user must "
                         "reconnect it in Data Sources "
                         f"(or run `jarvis connect {source}`)."
                     )
-                    failed_sources.add(source)
-                    continue
-
                 # Cap per-source to avoid overwhelming the LLM context
                 max_per_source = 40
                 docs: List[Document] = []
@@ -525,11 +519,20 @@ class DigestCollectTool(BaseTool):
                     docs.append(d)
                     if len(docs) >= max_per_source:
                         break
-
-                collected_docs[source] = docs
+                return docs, ""
             except Exception as exc:
-                errors.append(f"Error fetching from '{source}': {exc}")
+                return None, f"Error fetching from '{source}': {exc}"
+
+        # Connectors are independent network calls: fetch them together
+        # (sequentially, Gmail + Calendar added up to ~12 s).
+        with ThreadPoolExecutor(max_workers=max(1, len(sources))) as pool:
+            results = list(pool.map(fetch, sources))
+        for source, (docs, error) in zip(sources, results):
+            if docs is None:
+                errors.append(error)
                 failed_sources.add(source)
+            else:
+                collected_docs[source] = docs
 
         # Group by section and build human-readable output
         summary_parts: List[str] = []

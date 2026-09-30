@@ -328,7 +328,7 @@ _MATCHERS = (
 
 BRIEFING_MARKER = "JARVIS_WELCOME_TRIGGER"
 
-_BRIEFING_CALLS: tuple[tuple[str, Dict[str, Any]], ...] = (
+BRIEFING_CALLS: tuple[tuple[str, Dict[str, Any]], ...] = (
     ("get_weather", {"location": "Bogotá", "units": "metric"}),
     ("digest_collect", {"sources": ["gcalendar", "gmail"]}),
 )
@@ -338,7 +338,7 @@ def briefing_prefetch(text: str, tool_names: set[str]) -> list[tuple[str, Dict[s
     """Tool calls to run before the model for a briefing prompt, else ``[]``."""
     if not text.lstrip().startswith(BRIEFING_MARKER):
         return []
-    return [(name, args) for name, args in _BRIEFING_CALLS if name in tool_names]
+    return [(name, args) for name, args in BRIEFING_CALLS if name in tool_names]
 
 
 def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
@@ -353,4 +353,10 @@ def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
     return None
 
 
-__all__ = ["BRIEFING_MARKER", "FastPath", "briefing_prefetch", "match_fast_path"]
+__all__ = [
+    "BRIEFING_CALLS",
+    "BRIEFING_MARKER",
+    "FastPath",
+    "briefing_prefetch",
+    "match_fast_path",
+]

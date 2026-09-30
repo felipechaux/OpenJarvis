@@ -598,13 +598,15 @@ class NativeReActAgent(ToolUsingAgent):
         tainted = session_guard.has_injected_context(messages)
 
         # The daily briefing's data is fetched up front, as if the model had
-        # already made the calls, so it only has to write the briefing.
+        # already made the calls, so it only has to write the briefing.  The
+        # server warms these calls at boot (agents/briefing_cache.py).
+        from openjarvis.agents import briefing_cache
         from openjarvis.agents.fast_paths import briefing_prefetch
 
         names = {t.spec.name for t in self._tools}
         for i, (name, args) in enumerate(briefing_prefetch(input, names)):
             arguments = json.dumps(args, ensure_ascii=False)
-            tool_result = self._executor.execute(
+            tool_result = briefing_cache.take(name, args) or self._executor.execute(
                 ToolCall(id=f"prefetch_{i}", name=name, arguments=arguments)
             )
             if session_guard.taints(name):
