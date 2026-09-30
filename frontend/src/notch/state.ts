@@ -17,6 +17,7 @@ export const NOTCH_LABEL = 'notch';
 const TOOL_LABELS: Record<string, string> = {
   look_at_screen: 'Mirando tu pantalla',
   browser_task: 'Navegando en la web',
+  chrome_tabs: 'Revisando pestañas',
   start_coding_session: 'Abriendo sesión de código',
   send_to_session: 'Hablando con la sesión',
   coding_sessions: 'Revisando sesiones',

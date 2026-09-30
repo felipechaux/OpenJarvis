@@ -157,6 +157,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.chrome_tabs  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
 except ImportError:
     pass

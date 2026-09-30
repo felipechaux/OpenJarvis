@@ -9,6 +9,11 @@ import { useTTS, isLikelySelfEcho } from '../../hooks/useTTS';
 import { WAKE_EVENT, INTERRUPT_EVENT, markCommandSent } from '../../hooks/useWakeWord';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
+// Tools that take minutes: spoken up front so the wait is not silent.
+const SLOW_TOOL_ACKS: Record<string, string> = {
+  browser_task: 'Voy al navegador, señor; esto puede tardar un par de minutos.',
+};
+
 export function InputArea() {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -268,6 +273,11 @@ export function InputArea() {
               status: 'running',
             };
             toolCalls.push(tc);
+            // Slow tools: say so before the silence, unless the model already spoke.
+            const ack = SLOW_TOOL_ACKS[data.tool];
+            if (ack && ttsEnabled && !accumulatedContent.trim() && !controller.signal.aborted) {
+              enqueueSpeech(ack);
+            }
             setStreamState({
               phase: `Calling ${data.tool}...`,
               activeToolCalls: [...toolCalls],

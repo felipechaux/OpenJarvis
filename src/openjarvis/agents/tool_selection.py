@@ -67,6 +67,10 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"navega|navegador|browser|chrome|busca|search|web|internet|p[aá]gina"
             r"|sitio|precio|vuelo|reserva|gmail|github|compara|google|en l[ií]nea"
         ),
+        "chrome_tabs": (
+            r"pesta[nñ]a|tab\b|tabs\b|chrome|navegador|browser|abierto|cierra"
+            r"|close|ve a|switch"
+        ),
         "look_at_screen": (
             r"pantalla|screen|\bves\b|\bmira\b|\besto\b|\besta\b|aqu[ií]"
             r"|abierto|ventana|window|error|see\b|look"

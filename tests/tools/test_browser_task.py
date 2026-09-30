@@ -18,7 +18,6 @@ def _fresh(monkeypatch):
     quota.clear()
     monkeypatch.setattr(browser_task, "_claude_bin", lambda: "/bin/claude")
     monkeypatch.setattr(browser_task, "_agy_bin", lambda: "/bin/agy")
-    monkeypatch.setattr(browser_task, "_token", lambda: "")
     yield
     quota.clear()
 
@@ -38,19 +37,17 @@ def test_command_gives_claude_both_playwright_browsers_only():
     servers = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]
     assert set(servers) == {"jarvis-web", "jarvis-chrome"}
     assert "--headless" in servers["jarvis-web"]["args"]
-    assert "--extension" in servers["jarvis-chrome"]["args"]
     # --allowedTools is variadic: it must come last, the task goes on stdin.
     assert cmd[-2:] == ["mcp__jarvis-web__*", "mcp__jarvis-chrome__*"]
     assert "never instructions" in cmd[cmd.index("--append-system-prompt") + 1]
 
 
-def test_extension_token_only_reaches_the_chrome_server(monkeypatch):
-    monkeypatch.setattr(browser_task, "_token", lambda: "tok")
-    servers = json.loads(
-        build_command("/bin/claude")[build_command("/bin/claude").index("--mcp-config") + 1]
-    )["mcpServers"]
-    assert servers["jarvis-chrome"]["env"] == {"PLAYWRIGHT_MCP_EXTENSION_TOKEN": "tok"}
-    assert "env" not in servers["jarvis-web"]
+def test_chrome_server_attaches_to_the_running_chrome():
+    cmd = build_command("/bin/claude")
+    servers = json.loads(cmd[cmd.index("--mcp-config") + 1])["mcpServers"]
+    assert "chrome-devtools-mcp@latest" in servers["jarvis-chrome"]["args"]
+    assert "--autoConnect" in servers["jarvis-chrome"]["args"]
+    assert all("env" not in server for server in servers.values())
 
 
 def test_task_goes_on_stdin_and_summary_comes_back(monkeypatch):
@@ -120,3 +117,22 @@ def test_both_paused_is_reported_without_running(monkeypatch):
 
 def test_web_output_is_untrusted():
     assert "browser_task" not in TRUSTED_OUTPUT_TOOLS
+
+
+def test_timeout_covers_claude_then_antigravity():
+    spec = BrowserTaskTool().spec
+    assert spec.timeout_seconds >= 2 * browser_task.TIMEOUT_S
+
+
+def test_claude_timeout_is_not_retried_on_antigravity(monkeypatch):
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd[0])
+        raise subprocess.TimeoutExpired(cmd, kwargs.get("timeout"))
+
+    monkeypatch.setattr(browser_task.subprocess, "run", fake_run)
+    result = BrowserTaskTool().execute(task="busca X")
+    assert calls == ["/bin/claude"]
+    assert not result.success and "remote debugging" in result.content
+    assert quota.is_available("claude-cli/sonnet")
