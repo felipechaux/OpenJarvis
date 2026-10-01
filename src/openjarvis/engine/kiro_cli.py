@@ -216,6 +216,7 @@ class KiroCLIEngine(InferenceEngine):
         **kwargs: Any,
     ) -> Dict[str, Any]:
         # temperature / max_tokens / tools are not supported by ``kiro-cli``.
+        model = _working_model(model)
         _, prompt = self._split_messages(messages)
         agent = self._prepare(model)
         try:
@@ -245,6 +246,15 @@ class KiroCLIEngine(InferenceEngine):
                 error = payload
         content = (final or "".join(chunks)).strip()
         if error or (proc.returncode != 0 and not content):
+            fallback = _fallback_model(model, error)
+            if fallback:
+                logger.warning(
+                    "%s failed (%s); retrying with %s", model, error, fallback
+                )
+                return self.generate(
+                    messages, model=fallback, temperature=temperature,
+                    max_tokens=max_tokens, **kwargs,
+                )
             raise RuntimeError(f"Kiro CLI failed: {explain_error(proc.stderr, error)}")
 
         prompt_tokens = estimate_prompt_tokens(messages)
@@ -270,6 +280,7 @@ class KiroCLIEngine(InferenceEngine):
         max_tokens: int = 1024,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
+        model = _working_model(model)
         _, prompt = self._split_messages(messages)
         agent = self._prepare(model)
         proc = await asyncio.create_subprocess_exec(
@@ -310,6 +321,17 @@ class KiroCLIEngine(InferenceEngine):
                 await proc.wait()
         stderr = (await stderr_task).decode(errors="replace")
         if error or (proc.returncode not in (0, None) and not produced):
+            fallback = None if produced else _fallback_model(model, error)
+            if fallback:
+                logger.warning(
+                    "%s failed (%s); retrying with %s", model, error, fallback
+                )
+                async for chunk in self.stream(
+                    messages, model=fallback, temperature=temperature,
+                    max_tokens=max_tokens, **kwargs,
+                ):
+                    yield chunk
+                return
             raise RuntimeError(f"Kiro CLI failed: {explain_error(stderr, error)}")
 
     def list_models(self) -> List[str]:
@@ -343,6 +365,38 @@ class KiroCLIEngine(InferenceEngine):
             "provider": "kiro_cli",
             "context_length": 200_000,
         }
+
+
+# Some models (claude-opus-5.5 and claude-opus-5 on 2026-10-01) answer any
+# prompt carrying JARVIS's ReAct format (Thought / Action / Action Input)
+# with this generic error, while plain prompts work.  Retry the turn once on
+# the strongest model that handles it instead of failing the user's turn.
+_GENERATION_FAILED = "failed to generate a response"
+_STRONG_FALLBACK = f"{MODEL_PREFIX}claude-opus-4.8"
+_LAST_RESORT = f"{MODEL_PREFIX}auto"
+
+
+# Models that failed that way in this process: later calls go straight to
+# the fallback instead of paying a failing call on every ReAct step.
+_failing: Dict[str, str] = {}
+
+
+def _fallback_model(model: str, error_text: str) -> str | None:
+    """Next model to try after a generation failure (None: give up)."""
+    if _GENERATION_FAILED not in (error_text or "").lower() or model == _LAST_RESORT:
+        return None
+    fallback = _LAST_RESORT if model == _STRONG_FALLBACK else _STRONG_FALLBACK
+    _failing[model] = fallback
+    return fallback
+
+
+def _working_model(model: str) -> str:
+    """*model*, or what replaced it after it failed to generate earlier."""
+    seen = {model}
+    while model in _failing and _failing[model] not in seen:
+        model = _failing[model]
+        seen.add(model)
+    return model
 
 
 __all__ = ["KIRO_MODELS", "KiroCLIEngine", "MODEL_PREFIX"]

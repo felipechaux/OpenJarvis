@@ -65,6 +65,7 @@ REPLY = _events(
 def _tmp_workspace(tmp_path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(kc, "_WORKSPACE", tmp_path / "ws")
     monkeypatch.setattr(kc, "_models_cache", (0.0, []))
+    monkeypatch.setattr(kc, "_failing", {})
 
 
 class TestAgentProfile:
@@ -220,3 +221,55 @@ class TestModels:
     def test_not_routed_to_cloud(self) -> None:
         assert not is_cloud_model("kiro-cli/claude-sonnet-4.6")
         assert not is_cloud_model("kiro-cli/auto")
+
+
+GEN_FAILED = "Internal error (code -32603): Kiro failed to generate a response"
+
+
+class TestGenerationFailureFallback:
+    def test_chain(self) -> None:
+        assert kc._fallback_model("kiro-cli/claude-opus-5.5", GEN_FAILED) == (
+            "kiro-cli/claude-opus-4.8"
+        )
+        assert kc._fallback_model("kiro-cli/claude-opus-4.8", GEN_FAILED) == (
+            "kiro-cli/auto"
+        )
+        assert kc._fallback_model("kiro-cli/auto", GEN_FAILED) is None
+        assert kc._fallback_model("kiro-cli/claude-opus-5.5", "quota") is None
+
+    def test_generate_retries_on_strong_fallback(self) -> None:
+        failed = subprocess.CompletedProcess(
+            [], 1, stdout=_events(_run_error(GEN_FAILED)), stderr=""
+        )
+        ok = subprocess.CompletedProcess([], 0, stdout=REPLY, stderr="")
+        eng = _engine()
+        with patch("subprocess.run", side_effect=[failed, ok]) as run:
+            res = eng.generate(HOLA, model="kiro-cli/claude-opus-5.5")
+        assert res["content"] == "Hola, señor."
+        assert res["model"] == "kiro-cli/claude-opus-4.8"
+        agents = [c.args[0][c.args[0].index("--agent") + 1] for c in run.call_args_list]
+        assert agents == ["jarvis-claude-opus-5-5", "jarvis-claude-opus-4-8"]
+
+    def test_stream_retries_when_nothing_was_streamed(self) -> None:
+        procs = iter([
+            _FakeProc(_events(_run_error(GEN_FAILED)), rc=1),
+            _FakeProc(REPLY),
+        ])
+
+        async def fake_exec(*args, **kwargs):
+            return next(procs)
+
+        with patch("asyncio.create_subprocess_exec", fake_exec):
+            assert "".join(_collect("kiro-cli/claude-opus-5")) == "Hola, señor."
+
+    def test_failing_model_is_skipped_afterwards(self) -> None:
+        failed = subprocess.CompletedProcess(
+            [], 1, stdout=_events(_run_error(GEN_FAILED)), stderr=""
+        )
+        ok = subprocess.CompletedProcess([], 0, stdout=REPLY, stderr="")
+        eng = _engine()
+        with patch("subprocess.run", side_effect=[failed, ok, ok]) as run:
+            eng.generate(HOLA, model="kiro-cli/claude-opus-5.5")
+            res = eng.generate(HOLA, model="kiro-cli/claude-opus-5.5")
+        assert run.call_count == 3  # one failing call, then straight to 4.8
+        assert res["model"] == "kiro-cli/claude-opus-4.8"
