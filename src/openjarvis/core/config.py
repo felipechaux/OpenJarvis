@@ -269,6 +269,45 @@ CLI_ENGINE_MODELS: Dict[str, str] = {
     "gemini_cli": "gemini-cli/default",
 }
 
+# The JARVIS assistant on a CLI engine: a ReAct agent with the personal
+# assistant tools (weather, briefing, coding sessions, apps, memory, the
+# knowledge graph…).  ``simple`` has no tools, so a model asked for the
+# briefing writes the tool calls out as text instead of running them.
+JARVIS_AGENT = "native_react"
+JARVIS_TOOLS = [
+    "think", "calculator", "web_search", "get_weather", "digest_collect",
+    "knowledge_search", "memory_manage", "user_profile_manage",
+    "show_knowledge_graph", "model_switch", "open_app", "open_url", "spotify",
+    "apple_notes", "start_coding_session", "coding_sessions", "send_to_session",
+    "browser_task", "chrome_tabs", "look_at_screen",
+]
+
+
+def apply_cli_engine_preset(engine: str, path: Optional[Path] = None) -> None:
+    """Point a config at CLI *engine* and give it the JARVIS agent and tools.
+
+    Keeps everything else in the file; creates it if missing.  Used by the
+    desktop's first-run CLI choice.
+    """
+    import tomlkit
+
+    if engine not in CLI_ENGINE_MODELS:
+        raise ValueError(f"{engine!r} is not a CLI engine")
+    path = path or DEFAULT_CONFIG_PATH
+    doc = tomlkit.parse(path.read_text()) if path.exists() else tomlkit.document()
+    values = {
+        "engine": {"default": engine},
+        "intelligence": {"default_model": CLI_ENGINE_MODELS[engine]},
+        "agent": {"default_agent": JARVIS_AGENT, "tools": ",".join(JARVIS_TOOLS)},
+    }
+    for section, keys in values.items():
+        if section not in doc:
+            doc.add(section, tomlkit.table())
+        for key, value in keys.items():
+            doc[section][key] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(tomlkit.dumps(doc))
+
 
 def recommend_model(hw: HardwareInfo, engine: str) -> str:
     """Suggest the best Qwen3.5 model that fits the detected hardware.
@@ -1808,8 +1847,13 @@ def generate_minimal_toml(
     if hw.gpu:
         mem_label = "unified memory" if hw.gpu.vendor == "apple" else "VRAM"
         gpu_comment = f"\n# GPU: {hw.gpu.name} ({hw.gpu.vram_gb} GB {mem_label})"
+    agent_section = '[agent]\ndefault_agent = "simple"\n'
     if engine in CLI_ENGINE_MODELS:
         engine_host_section = ""
+        agent_section = (
+            f'[agent]\ndefault_agent = "{JARVIS_AGENT}"\n'
+            f'tools = "{",".join(JARVIS_TOOLS)}"\n'
+        )
     elif host:
         engine_host_section = f'\n[engine.{engine}]\nhost = "{host}"\n'
     else:
@@ -1829,9 +1873,7 @@ default = "{engine}"
 [intelligence]
 default_model = "{model}"
 
-[agent]
-default_agent = "simple"
-
+{agent_section}
 [tools]
 enabled = ["code_interpreter", "web_search", "file_read", "shell_exec"]
 """

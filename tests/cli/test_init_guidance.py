@@ -268,6 +268,8 @@ class TestInitCliEngines:
         assert 'default = "kiro_cli"' in text
         assert 'default_model = "kiro-cli/auto"' in text
         assert "host" not in text
+        assert 'default_agent = "native_react"' in text
+        assert "get_weather" in text and "digest_collect" in text
         assert "kiro-cli login" in result.output
 
     def test_bare_jarvis_prefers_installed_cli(self, tmp_path: Path) -> None:
@@ -283,3 +285,46 @@ class TestInitCliEngines:
         )
         assert result.exit_code == 0, result.output
         assert 'default_model = "antigravity/default"' in config_path.read_text()
+
+
+class TestConfigUseCli:
+    def test_sets_engine_agent_and_tools_keeping_the_rest(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        import tomllib
+
+        path = tmp_path / "config.toml"
+        path.write_text(
+            '[engine]\ndefault = "mlx"\n\n[tools.launcher]\nclaude_model = "opus"\n'
+        )
+        monkeypatch.setenv("OPENJARVIS_CONFIG", str(path))
+        result = CliRunner().invoke(cli, ["config", "use-cli", "kiro_cli"])
+        assert result.exit_code == 0, result.output
+        data = tomllib.loads(path.read_text())
+        assert data["engine"]["default"] == "kiro_cli"
+        assert data["intelligence"]["default_model"] == "kiro-cli/auto"
+        assert data["agent"]["default_agent"] == "native_react"
+        assert "get_weather" in data["agent"]["tools"].split(",")
+        assert data["tools"]["launcher"]["claude_model"] == "opus"
+
+    def test_rejects_non_cli_engine(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setenv("OPENJARVIS_CONFIG", str(tmp_path / "config.toml"))
+        result = CliRunner().invoke(cli, ["config", "use-cli", "ollama"])
+        assert result.exit_code == 1
+        assert not (tmp_path / "config.toml").exists()
+
+    def test_preset_tools_are_registered(self) -> None:
+        # A fresh interpreter: the test suite resets the registries.
+        import subprocess
+        import sys
+
+        code = (
+            "import openjarvis.tools\n"
+            "from openjarvis.core.config import JARVIS_TOOLS\n"
+            "from openjarvis.core.registry import ToolRegistry\n"
+            "print([t for t in JARVIS_TOOLS if not ToolRegistry.contains(t)])"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, check=True
+        )
+        assert out.stdout.strip() == "[]"

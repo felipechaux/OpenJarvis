@@ -372,4 +372,32 @@ def set_config(key: str, value: str) -> None:
 config.add_command(set_config, "set")
 
 
+@click.command("use-cli")
+@click.argument("engine")
+def use_cli(engine: str) -> None:
+    """Run JARVIS on a CLI engine (e.g. kiro_cli) with its agent and tools."""
+    from openjarvis.core.config import (
+        CLI_ENGINE_MODELS,
+        DEFAULT_CONFIG_DIR,
+        apply_cli_engine_preset,
+    )
+
+    console = Console(stderr=True)
+    if engine not in CLI_ENGINE_MODELS:
+        console.print(
+            f"[red]Error:[/red] {engine!r} is not a CLI engine "
+            f"({', '.join(CLI_ENGINE_MODELS)})."
+        )
+        raise SystemExit(1)
+    path = Path(os.environ.get("OPENJARVIS_CONFIG", DEFAULT_CONFIG_DIR / "config.toml"))
+    apply_cli_engine_preset(engine, path)
+    console.print(
+        f"[green]JARVIS now runs on {engine}[/green] "
+        f"({CLI_ENGINE_MODELS[engine]}, native_react with the JARVIS tools)."
+    )
+
+
+config.add_command(use_cli, "use-cli")
+
+
 __all__ = ["config"]

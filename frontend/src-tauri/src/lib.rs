@@ -563,28 +563,22 @@ async fn wait_for_engine_choice() -> String {
     }
 }
 
-/// Persist the chosen CLI as the default engine and model via
-/// ``jarvis config set`` (keeps any existing config intact).
+/// Persist the chosen CLI via ``jarvis config use-cli``: engine, model and
+/// the JARVIS agent with its tools (keeps the rest of the config intact).
 async fn save_engine_choice(opt: &CliOption) -> Result<(), String> {
     let root = find_project_root()
         .ok_or_else(|| "Could not find the OpenJarvis repo to save the choice.".to_string())?;
-    let uv_bin = resolve_bin("uv");
-    for (key, value) in [
-        ("engine.default", opt.key.as_str()),
-        ("intelligence.default_model", opt.model.as_str()),
-    ] {
-        let out = tokio::process::Command::new(&uv_bin)
-            .args(["run", "jarvis", "config", "set", key, value])
-            .current_dir(&root)
-            .output()
-            .await
-            .map_err(|e| format!("Could not save the engine choice: {e}"))?;
-        if !out.status.success() {
-            return Err(format!(
-                "Could not save the engine choice: {}",
-                String::from_utf8_lossy(&out.stderr).trim()
-            ));
-        }
+    let out = tokio::process::Command::new(resolve_bin("uv"))
+        .args(["run", "jarvis", "config", "use-cli", &opt.key])
+        .current_dir(&root)
+        .output()
+        .await
+        .map_err(|e| format!("Could not save the engine choice: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "Could not save the engine choice: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
     Ok(())
 }
