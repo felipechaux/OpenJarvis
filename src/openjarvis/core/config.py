@@ -872,6 +872,24 @@ class NotesConfig:
     folder: str = "JARVIS"
 
 
+@dataclass
+class KnowledgeConfig:
+    """Knowledge graph (``tools/knowledge_sync.py``): what graphify may read."""
+
+    # Source file names (glob, case-insensitive) kept out of the graph: the
+    # graph is sent to the extraction model and copied into an Obsidian vault.
+    exclude: List[str] = field(
+        default_factory=lambda: [
+            "*credential*", "*secret*", "*password*", "*passwd*",
+            "*token*", "*apikey*", "*api-key*", "*api_key*", "*.env*",
+        ]
+    )
+    # How often the running server checks the sources (Claude Code memories
+    # written by other sessions, USER.md…) and rebuilds the graph if one
+    # changed.  The check is local; only a change costs a model call.  0 = off.
+    refresh_minutes: float = 30.0
+
+
 @dataclass(slots=True)
 class ToolsConfig:
     """Tools primitive settings — wraps storage and MCP configuration."""
@@ -881,6 +899,7 @@ class ToolsConfig:
     browser: BrowserConfig = field(default_factory=BrowserConfig)
     launcher: LauncherConfig = field(default_factory=LauncherConfig)
     notes: NotesConfig = field(default_factory=NotesConfig)
+    knowledge: KnowledgeConfig = field(default_factory=KnowledgeConfig)
     enabled: str = ""  # comma-separated default tools
 
 

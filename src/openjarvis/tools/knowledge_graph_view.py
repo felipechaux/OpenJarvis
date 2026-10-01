@@ -1,7 +1,9 @@
 """Show the user's knowledge graph in Obsidian.
 
-The graph is built by ``~/.openjarvis/knowledge/sync.sh`` (graphify over the
-user's Claude memory files and ~/.openjarvis USER.md / SOUL.md).  This tool
+The graph is built by :mod:`openjarvis.tools.knowledge_sync` (graphify over
+the user's Claude memory files and ~/.openjarvis USER.md / SOUL.md /
+MEMORY.md), or by a hand-written ``~/.openjarvis/knowledge/sync.sh`` if the
+user keeps one.  This tool
 re-exports it as an Obsidian vault so the notes match the current graph,
 makes sure the vault is registered and opens in graph view, then opens it.
 
@@ -14,7 +16,6 @@ from __future__ import annotations
 
 import json
 import secrets
-import shutil
 import subprocess
 import sys
 import threading
@@ -67,12 +68,21 @@ _GRAPH_WORKSPACE = {
 }
 
 
-def _graphify_bin() -> Optional[str]:
-    found = shutil.which("graphify")
-    if found:
-        return found
-    fallback = Path.home() / ".local" / "bin" / "graphify"
-    return str(fallback) if fallback.exists() else None
+def graphify_bin() -> Optional[str]:
+    # Imported lazily: ``python -m openjarvis.tools.knowledge_sync`` must not
+    # find its own module already loaded by ``openjarvis.tools``.
+    from openjarvis.tools.knowledge_sync import graphify_bin as find
+
+    return find()
+
+
+def _sync_command() -> Optional[list[str]]:
+    """The user's own sync.sh if present, else the built-in graphify sync."""
+    if _SYNC_SCRIPT.exists():
+        return ["/bin/bash", str(_SYNC_SCRIPT)]
+    if graphify_bin():
+        return [sys.executable, "-m", "openjarvis.tools.knowledge_sync"]
+    return None
 
 
 def _counts(graph: Path) -> tuple[int, int]:
@@ -105,6 +115,18 @@ def _register_vault(vault: Path) -> None:
         pass
 
 
+def prepare_vault(vault: Path) -> None:
+    """Open *vault* on graph view (unless it has a layout) and register it."""
+    if not vault.is_dir():
+        return
+    workspace = vault / ".obsidian" / "workspace.json"
+    if not workspace.exists():
+        workspace.parent.mkdir(parents=True, exist_ok=True)
+        workspace.write_text(json.dumps(_GRAPH_WORKSPACE))
+    if _OBSIDIAN_APP.exists():
+        _register_vault(vault)
+
+
 def _start_timer(delay: float) -> None:
     global _sync_timer
     if _sync_timer is not None:
@@ -118,12 +140,51 @@ def schedule_sync(delay: float = _SYNC_DELAY_S) -> bool:
     """Rebuild the knowledge graph in the background after ``delay`` seconds.
 
     Calls within the delay are batched into one run.  Returns False when
-    there is no sync script to run.
+    there is nothing to build it with (no sync.sh and no graphify).
     """
-    if not _SYNC_SCRIPT.exists():
+    if _sync_command() is None:
         return False
     with _sync_lock:
         _start_timer(delay)
+    return True
+
+
+_refresh_thread: Optional[threading.Thread] = None
+
+
+def _sources_changed() -> bool:
+    if _SYNC_SCRIPT.exists():
+        return True  # a hand-written sync.sh decides for itself
+    from openjarvis.tools.knowledge_sync import needs_rebuild
+
+    return needs_rebuild()
+
+
+def start_periodic_refresh(interval_s: float) -> bool:
+    """Check the sources every ``interval_s`` seconds; rebuild when changed.
+
+    Catches what JARVIS does not write itself — Claude Code memories saved
+    by other sessions — while the server stays up.  Idempotent.
+    """
+    global _refresh_thread
+    if interval_s <= 0 or _sync_command() is None:
+        return False
+    if _refresh_thread is not None and _refresh_thread.is_alive():
+        return True
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval_s)
+            try:
+                if _sources_changed():
+                    schedule_sync(delay=1.0)
+            except Exception:  # noqa: BLE001 — keep checking next round
+                pass
+
+    _refresh_thread = threading.Thread(
+        target=loop, name="knowledge-graph-refresh", daemon=True
+    )
+    _refresh_thread.start()
     return True
 
 
@@ -147,10 +208,14 @@ def _run_sync() -> None:
         if _sync_proc is not None and _sync_proc.poll() is None:
             _start_timer(_SYNC_DELAY_S)  # a run is in flight; follow up after it
             return
+        cmd = _sync_command()
+        if cmd is None:
+            return
         try:
+            _KNOWLEDGE.mkdir(parents=True, exist_ok=True)
             with _SYNC_LOG.open("ab") as log:
                 _sync_proc = subprocess.Popen(
-                    ["/bin/bash", str(_SYNC_SCRIPT)],
+                    cmd,
                     stdout=log,
                     stderr=log,
                     stdin=subprocess.DEVNULL,
@@ -192,11 +257,15 @@ class ShowKnowledgeGraphTool(BaseTool):
             )
         graph = _CORPUS / "graphify-out" / "graph.json"
         if not graph.exists():
+            building = schedule_sync(delay=1.0)
             return ToolResult(
                 tool_name=TOOL,
                 content=(
-                    "The knowledge graph has not been built yet. The user can "
-                    "build it by running ~/.openjarvis/knowledge/sync.sh."
+                    "The knowledge graph has not been built yet; building it now "
+                    "in the background — it takes a few minutes, ask again then."
+                    if building
+                    else "The knowledge graph cannot be built: graphify is not "
+                    'installed (uv tool install "graphifyy[openai]").'
                 ),
                 success=False,
             )
@@ -207,7 +276,7 @@ class ShowKnowledgeGraphTool(BaseTool):
                 success=False,
             )
         vault = _CORPUS / "graphify-out" / "obsidian"
-        graphify = _graphify_bin()
+        graphify = graphify_bin()
         if graphify:
             try:  # refresh the notes from the current graph (~1 s)
                 subprocess.run(
@@ -224,11 +293,7 @@ class ShowKnowledgeGraphTool(BaseTool):
                 content="Could not export the knowledge graph as an Obsidian vault.",
                 success=False,
             )
-        workspace = vault / ".obsidian" / "workspace.json"
-        if not workspace.exists():
-            workspace.parent.mkdir(parents=True, exist_ok=True)
-            workspace.write_text(json.dumps(_GRAPH_WORKSPACE))
-        _register_vault(vault)
+        prepare_vault(vault)
         try:
             subprocess.run(
                 ["open", f"obsidian://open?path={quote(str(vault))}"],

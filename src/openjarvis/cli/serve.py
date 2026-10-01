@@ -622,6 +622,27 @@ def serve(
     except Exception as exc:
         logger.warning("Briefing warm-up failed: %s", exc)
 
+    # Build (first run) or refresh the knowledge graph once the server is up:
+    # graphify extracts through this server's own API.  A no-op when no
+    # source changed since the last build.
+    # Then keep it fed while the server runs (memories other Claude sessions
+    # write are only seen this way).
+    try:
+        from openjarvis.tools.knowledge_graph_view import (
+            schedule_sync,
+            start_periodic_refresh,
+        )
+
+        if schedule_sync(delay=20.0):
+            minutes = config.tools.knowledge.refresh_minutes
+            start_periodic_refresh(minutes * 60)
+            every = f", re-checked every {minutes:g} min" if minutes > 0 else ""
+            console.print(
+                f"  Graph:  [cyan]knowledge graph sync scheduled{every}[/cyan]"
+            )
+    except Exception as exc:
+        logger.warning("Knowledge graph sync scheduling failed: %s", exc)
+
     import uvicorn
 
     uvicorn.run(app, host=bind_host, port=bind_port, log_level="info")

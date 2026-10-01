@@ -26,7 +26,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(kg, "_OBSIDIAN_APP", app)
     monkeypatch.setattr(kg, "_OBSIDIAN_CONFIG", tmp_path / "obsidian.json")
     monkeypatch.setattr(kg.sys, "platform", "darwin")
-    monkeypatch.setattr(kg, "_graphify_bin", lambda: None)
+    monkeypatch.setattr(kg, "graphify_bin", lambda: None)
     return corpus
 
 
@@ -57,10 +57,19 @@ def test_keeps_existing_layout_and_vaults(env: Path) -> None:
     assert len(json.loads(kg._OBSIDIAN_CONFIG.read_text())["vaults"]) == 2
 
 
-def test_missing_graph(env: Path) -> None:
+def test_missing_graph_starts_a_build(env: Path) -> None:
     (env / "graphify-out" / "graph.json").unlink()
-    res = kg.ShowKnowledgeGraphTool().execute()
-    assert not res.success and "sync.sh" in res.content
+    with patch.object(kg, "schedule_sync", return_value=True) as schedule:
+        res = kg.ShowKnowledgeGraphTool().execute()
+    assert not res.success and "building it now" in res.content
+    schedule.assert_called_once()
+
+
+def test_missing_graph_without_graphify(env: Path) -> None:
+    (env / "graphify-out" / "graph.json").unlink()
+    with patch.object(kg, "schedule_sync", return_value=False):
+        res = kg.ShowKnowledgeGraphTool().execute()
+    assert not res.success and "graphify is not installed" in res.content
 
 
 @pytest.mark.parametrize(
@@ -102,6 +111,7 @@ class TestSync:
         script.write_text("#!/bin/bash\n")
         monkeypatch.setattr(kg, "_SYNC_SCRIPT", script)
         monkeypatch.setattr(kg, "_SYNC_LOG", tmp_path / "sync.log")
+        monkeypatch.setattr(kg, "_KNOWLEDGE", tmp_path)
         self.home = tmp_path / "home"
         monkeypatch.setattr(
             kg, "_SYNCED_SOURCES", {self.home / "MEMORY.md", self.home / "USER.md"}
@@ -123,6 +133,22 @@ class TestSync:
             kg._run_sync()  # what the timer would do, once
         popen.assert_called_once()
         assert popen.call_args.args[0][1] == str(kg._SYNC_SCRIPT)
+
+    def test_without_script_runs_builtin_sync(self) -> None:
+        kg._SYNC_SCRIPT.unlink()
+        with (
+            patch.object(kg, "graphify_bin", return_value="/bin/graphify"),
+            patch.object(kg.subprocess, "Popen") as popen,
+        ):
+            kg._run_sync()
+        assert popen.call_args.args[0][1:] == [
+            "-m", "openjarvis.tools.knowledge_sync"
+        ]
+
+    def test_nothing_to_sync_with(self) -> None:
+        kg._SYNC_SCRIPT.unlink()
+        with patch.object(kg, "graphify_bin", return_value=None):
+            assert kg.schedule_sync() is False
 
     def test_other_files_and_failures_do_not_sync(self, tmp_path: Path) -> None:
         with patch.object(kg, "schedule_sync") as schedule:
@@ -149,3 +175,41 @@ class TestSync:
             assert tool.execute(action="add", entry="Le gusta el café").success
             tool.execute(action="read")
         schedule.assert_called_once()
+
+
+class TestPeriodicRefresh:
+    @pytest.fixture(autouse=True)
+    def _reset(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(kg, "_refresh_thread", None)
+        monkeypatch.setattr(kg, "_SYNC_SCRIPT", tmp_path / "missing.sh")
+        monkeypatch.setattr(kg, "graphify_bin", lambda: "/bin/graphify")
+
+    def _run_once(self, changed: bool):
+        """Run the refresh loop body once by making the second sleep stop it."""
+        sleeps = iter([None, SystemExit()])
+
+        def fake_sleep(_s):
+            step = next(sleeps)
+            if step is not None:
+                raise step
+
+        with (
+            patch.object(kg.time, "sleep", side_effect=fake_sleep),
+            patch.object(kg, "_sources_changed", return_value=changed),
+            patch.object(kg, "schedule_sync") as schedule,
+            patch.object(kg.threading, "Thread") as thread,
+        ):
+            assert kg.start_periodic_refresh(60)
+            loop = thread.call_args.kwargs["target"]
+            with pytest.raises(SystemExit):
+                loop()
+        return schedule
+
+    def test_rebuilds_when_sources_changed(self) -> None:
+        self._run_once(changed=True).assert_called_once_with(delay=1.0)
+
+    def test_quiet_when_nothing_changed(self) -> None:
+        self._run_once(changed=False).assert_not_called()
+
+    def test_disabled_with_zero_interval(self) -> None:
+        assert kg.start_periodic_refresh(0) is False
