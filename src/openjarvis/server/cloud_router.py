@@ -66,7 +66,7 @@ def _load_keys() -> dict[str, str]:
 
 def get_provider(model: str) -> str | None:
     """Return the provider for a model name, or None if it's a local model."""
-    if model.startswith(("claude-cli/", "gemini-cli/", "antigravity/")):
+    if model.startswith(("claude-cli/", "gemini-cli/", "antigravity/", "kiro-cli/")):
         return None  # CLI engines — served by the local engine chain
     if any(model.startswith(p) for p in _OPENAI_PREFIXES):
         return "openai"

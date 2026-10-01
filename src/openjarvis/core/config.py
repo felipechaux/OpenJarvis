@@ -260,14 +260,26 @@ _MODEL_TIERS = [
 ]
 _MODEL_TIER_FALLBACK = "qwen3.5:27b"
 
+# Coding-agent CLIs that serve models on the user's own subscription:
+# engine key → default model.  They need no local weights or host.
+CLI_ENGINE_MODELS: Dict[str, str] = {
+    "claude_cli": "claude-cli/sonnet",
+    "kiro_cli": "kiro-cli/auto",
+    "antigravity_cli": "antigravity/default",
+    "gemini_cli": "gemini-cli/default",
+}
+
 
 def recommend_model(hw: HardwareInfo, engine: str) -> str:
     """Suggest the best Qwen3.5 model that fits the detected hardware.
 
     Uses an explicit tier table mapping available memory to model size.
     Falls back to scanning the full catalog if the tiered model is not
-    compatible with the selected engine.
+    compatible with the selected engine.  CLI engines get their own default.
     """
+    if engine in CLI_ENGINE_MODELS:
+        return CLI_ENGINE_MODELS[engine]
+
     from openjarvis.intelligence.model_catalog import BUILTIN_MODELS
 
     available_gb = _available_memory_gb(hw)
@@ -1777,7 +1789,9 @@ def generate_minimal_toml(
     if hw.gpu:
         mem_label = "unified memory" if hw.gpu.vendor == "apple" else "VRAM"
         gpu_comment = f"\n# GPU: {hw.gpu.name} ({hw.gpu.vram_gb} GB {mem_label})"
-    if host:
+    if engine in CLI_ENGINE_MODELS:
+        engine_host_section = ""
+    elif host:
         engine_host_section = f'\n[engine.{engine}]\nhost = "{host}"\n'
     else:
         engine_host_section = (

@@ -15,6 +15,7 @@ from openjarvis.cli._bootstrap import detect_cloud_keys
 from openjarvis.cli.model import find_model_spec, hf_download, ollama_pull
 from openjarvis.cli.scan_cmd import PrivacyScanner
 from openjarvis.core.config import (
+    CLI_ENGINE_MODELS,
     DEFAULT_CONFIG_DIR,
     DEFAULT_CONFIG_PATH,
     _available_memory_gb,
@@ -36,6 +37,7 @@ _SUPPORTED_ENGINES = [
     "lmstudio",
     "exo",
     "nexa",
+    *CLI_ENGINE_MODELS,
 ]
 
 
@@ -64,8 +66,39 @@ def _detect_running_engines() -> list[str]:
     return running
 
 
+def _detect_cli_engines() -> list[str]:
+    """Installed coding-agent CLIs (Claude Code, Kiro, Antigravity, Gemini)."""
+    try:
+        import openjarvis.engine  # noqa: F401  # registers the CLI engines
+        from openjarvis.engine._discovery import detect_cli_engines
+
+        return detect_cli_engines()
+    except Exception:
+        return []
+
+
+_CLI_LOGIN_HINTS = {
+    "claude_cli": "claude   (then /login, once)",
+    "kiro_cli": "kiro-cli login",
+    "antigravity_cli": "agy   (sign in once)",
+    "gemini_cli": "gemini   (sign in once)",
+}
+
+
 def _next_steps_text(engine: str, model: str = "") -> str:
     """Return engine-specific next-steps guidance after init."""
+    if engine in CLI_ENGINE_MODELS:
+        return (
+            "Next steps:\n"
+            "\n"
+            "  1. Make sure the CLI is signed in to your subscription:\n"
+            f"     {_CLI_LOGIN_HINTS.get(engine, engine)}\n"
+            "\n"
+            "  2. Try it out:\n"
+            '     jarvis ask "Hello"\n'
+            "\n"
+            f"  Other models of this CLI: jarvis model list  (default: {model})"
+        )
     pull_model = model or "qwen3.5:2b"
     steps: dict[str, str] = {
         "ollama": (
@@ -368,9 +401,11 @@ def init(
     # Resolve engine: explicit flag > interactive selection > auto-detect
     if engine is None and config is None:
         recommended = recommend_engine(hw)
-        # Bare-jarvis cold path: use the recommended engine non-interactively.
+        clis = _detect_cli_engines()
+        # Bare-jarvis cold path: pick non-interactively — an installed CLI
+        # works right away, a local engine that is not running does not.
         if from_bare_jarvis:
-            engine = recommended
+            engine = clis[0] if clis else recommended
         else:
             console.print()
             console.print("[bold]Detecting running inference engines...[/bold]")
@@ -379,11 +414,16 @@ def init(
                 console.print(f"  Found running: [green]{', '.join(running)}[/green]")
             else:
                 console.print("  No running engines detected.")
+            if clis:
+                console.print(
+                    f"  Found installed CLIs: [green]{', '.join(clis)}[/green] "
+                    "[dim](use your subscription, no download)[/dim]"
+                )
 
-            # Build choices: show running engines first, then recommended, then rest
+            # Choices: running engines, installed CLIs, recommended, then rest
             seen: set[str] = set()
             choices: list[str] = []
-            for r in running:
+            for r in [*running, *clis]:
                 if r not in seen:
                     choices.append(r)
                     seen.add(r)
@@ -391,18 +431,20 @@ def init(
                 choices.append(recommended)
                 seen.add(recommended)
             for e in _SUPPORTED_ENGINES:
-                if e not in seen:
+                if e not in seen and e not in CLI_ENGINE_MODELS:
                     choices.append(e)
                     seen.add(e)
 
-            # Default: first running engine, or hardware recommendation
-            default = running[0] if running else recommended
+            # Default: a running engine, else an installed CLI, else hardware
+            default = running[0] if running else clis[0] if clis else recommended
 
             labels = []
             for c in choices:
                 parts = [c]
                 if c in running:
                     parts.append("running")
+                if c in clis:
+                    parts.append("installed CLI")
                 if c == recommended:
                     parts.append("recommended")
                 labels.append(
@@ -520,7 +562,11 @@ sources = ["hackernews", "news_rss"]
     selected_engine = engine or recommend_engine(hw)
     model = recommend_model(hw, selected_engine)
 
-    if not model:
+    if selected_engine in CLI_ENGINE_MODELS:
+        console.print(
+            f"\n  [bold]Model:[/bold] {model}  [dim](no download needed)[/dim]"
+        )
+    elif not model:
         console.print(
             "\n  [yellow]! Not enough memory to run any local model.[/yellow]\n"
             "  Consider a cloud engine or a machine with more RAM."

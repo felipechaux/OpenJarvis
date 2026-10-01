@@ -404,6 +404,9 @@ struct SetupStatus {
     server_ready: bool,
     model_ready: bool,
     error: Option<String>,
+    /// Installed CLIs offered on the setup screen while ``phase`` is
+    /// ``"choose_engine"``.
+    cli_options: Vec<CliOption>,
 }
 
 impl Default for SetupStatus {
@@ -415,6 +418,7 @@ impl Default for SetupStatus {
             server_ready: false,
             model_ready: false,
             error: None,
+            cli_options: Vec::new(),
         }
     }
 }
@@ -507,8 +511,114 @@ fn is_cloud_model(model: &str) -> bool {
         || m.starts_with("chatgpt-")
 }
 
+// ---------------------------------------------------------------------------
+// First-run engine choice: coding-agent CLIs on the user's subscription
+// ---------------------------------------------------------------------------
+
+/// A coding-agent CLI installed on this machine that JARVIS can run on.
+#[derive(serde::Serialize, Clone)]
+struct CliOption {
+    key: String,
+    label: String,
+    model: String,
+}
+
+/// Engine key, display name, binary, default model — mirrors
+/// ``CLI_ENGINE_MODELS`` in ``openjarvis/core/config.py``.
+const CLI_ENGINES: &[(&str, &str, &str, &str)] = &[
+    ("claude_cli", "Claude Code", "claude", "claude-cli/sonnet"),
+    ("kiro_cli", "Kiro", "kiro-cli", "kiro-cli/auto"),
+    ("antigravity_cli", "Antigravity", "agy", "antigravity/default"),
+    ("gemini_cli", "Gemini CLI", "gemini", "gemini-cli/default"),
+];
+
+fn detect_cli_engines() -> Vec<CliOption> {
+    CLI_ENGINES
+        .iter()
+        // ``resolve_bin`` hands back the bare name when nothing is found.
+        .filter(|(_, _, bin, _)| std::path::Path::new(&resolve_bin(bin)).is_absolute())
+        .map(|(key, label, _, model)| CliOption {
+            key: key.to_string(),
+            label: label.to_string(),
+            model: model.to_string(),
+        })
+        .collect()
+}
+
+/// Engine picked on the setup screen: a CLI engine key or ``"ollama"``.
+static ENGINE_CHOICE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+#[tauri::command]
+fn choose_engine(choice: String) {
+    *ENGINE_CHOICE.lock().unwrap() = Some(choice);
+}
+
+async fn wait_for_engine_choice() -> String {
+    loop {
+        let choice = ENGINE_CHOICE.lock().unwrap().take();
+        if let Some(choice) = choice {
+            return choice;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
+/// Persist the chosen CLI as the default engine and model via
+/// ``jarvis config set`` (keeps any existing config intact).
+async fn save_engine_choice(opt: &CliOption) -> Result<(), String> {
+    let root = find_project_root()
+        .ok_or_else(|| "Could not find the OpenJarvis repo to save the choice.".to_string())?;
+    let uv_bin = resolve_bin("uv");
+    for (key, value) in [
+        ("engine.default", opt.key.as_str()),
+        ("intelligence.default_model", opt.model.as_str()),
+    ] {
+        let out = tokio::process::Command::new(&uv_bin)
+            .args(["run", "jarvis", "config", "set", key, value])
+            .current_dir(&root)
+            .output()
+            .await
+            .map_err(|e| format!("Could not save the engine choice: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "Could not save the engine choice: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
-    let resolved_model = model_from_config();
+    let mut resolved_model = model_from_config();
+
+    // No model configured yet: offer the installed coding-agent CLIs before
+    // falling back to downloading a local Ollama model.
+    if resolved_model.is_empty() {
+        let options = detect_cli_engines();
+        if !options.is_empty() {
+            {
+                let mut s = status.lock().await;
+                s.phase = "choose_engine".into();
+                s.detail = "Choose how JARVIS should think.".into();
+                s.cli_options = options.clone();
+            }
+            let choice = wait_for_engine_choice().await;
+            {
+                let mut s = status.lock().await;
+                s.cli_options.clear();
+                s.phase = "starting".into();
+                s.detail = "Saving your choice...".into();
+            }
+            if let Some(opt) = options.iter().find(|o| o.key == choice) {
+                if let Err(e) = save_engine_choice(opt).await {
+                    status.lock().await.error = Some(e);
+                    return;
+                }
+                resolved_model = opt.model.clone();
+            }
+        }
+    }
     let cloud_only = is_cloud_model(&resolved_model);
 
     if cloud_only {
@@ -2338,6 +2448,7 @@ pub fn run() {
             notch_anchor,
             boot_sound,
             get_setup_status,
+            choose_engine,
             get_api_base,
             wake_ready,
             start_backend,

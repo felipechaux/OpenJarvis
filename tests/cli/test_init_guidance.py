@@ -238,3 +238,48 @@ class TestInitPrivacyHook:
             result = CliRunner().invoke(cli, ["init", "--engine", "llamacpp", _NO_DL])
         assert result.exit_code == 0
         assert "jarvis scan" in result.output
+
+
+class TestInitCliEngines:
+    def _init(self, tmp_path: Path, args: list[str], clis: list[str], stdin: str = ""):
+        config_dir = tmp_path / ".openjarvis"
+        config_path = config_dir / "config.toml"
+        with (
+            mock.patch("openjarvis.cli.init_cmd.DEFAULT_CONFIG_DIR", config_dir),
+            mock.patch("openjarvis.cli.init_cmd.DEFAULT_CONFIG_PATH", config_path),
+            mock.patch("openjarvis.cli.init_cmd.PrivacyScanner"),
+            mock.patch(
+                "openjarvis.cli.init_cmd._detect_running_engines", return_value=[]
+            ),
+            mock.patch(
+                "openjarvis.cli.init_cmd._detect_cli_engines", return_value=clis
+            ),
+        ):
+            result = CliRunner().invoke(cli, ["init", *args], input=stdin)
+        return result, config_path
+
+    def test_installed_cli_is_offered_and_default(self, tmp_path: Path) -> None:
+        result, config_path = self._init(
+            tmp_path, [_NO_DL], ["kiro_cli", "claude_cli"], stdin="\n"
+        )
+        assert result.exit_code == 0, result.output
+        assert "kiro_cli  (installed CLI)" in result.output
+        text = config_path.read_text()
+        assert 'default = "kiro_cli"' in text
+        assert 'default_model = "kiro-cli/auto"' in text
+        assert "host" not in text
+        assert "kiro-cli login" in result.output
+
+    def test_bare_jarvis_prefers_installed_cli(self, tmp_path: Path) -> None:
+        result, config_path = self._init(
+            tmp_path, ["--from-bare-jarvis", _NO_DL], ["claude_cli"]
+        )
+        assert result.exit_code == 0, result.output
+        assert 'default_model = "claude-cli/sonnet"' in config_path.read_text()
+
+    def test_engine_flag_accepts_cli(self, tmp_path: Path) -> None:
+        result, config_path = self._init(
+            tmp_path, ["--engine", "antigravity_cli", _NO_DL], []
+        )
+        assert result.exit_code == 0, result.output
+        assert 'default_model = "antigravity/default"' in config_path.read_text()

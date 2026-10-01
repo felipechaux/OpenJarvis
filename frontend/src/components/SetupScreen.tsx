@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Loader2, CheckCircle2, XCircle, Cpu, Server, Database } from 'lucide-react';
-import { getSetupStatus, type SetupStatus } from '../lib/api';
+import { Loader2, CheckCircle2, XCircle, Cpu, Server, Database, Terminal } from 'lucide-react';
+import { chooseEngine, getSetupStatus, type CliOption, type SetupStatus } from '../lib/api';
 
 const STEPS = [
   { key: 'ollama_ready', label: 'Inference Engine', icon: Cpu, detail: 'Starting Ollama...' },
@@ -68,8 +68,70 @@ function StepRow({
   );
 }
 
+function EngineChoice({
+  options,
+  onChoose,
+}: {
+  options: CliOption[];
+  onChoose: (key: string) => void;
+}) {
+  const [picked, setPicked] = useState<string | null>(null);
+  const pick = (key: string) => {
+    if (picked) return;
+    setPicked(key);
+    onChoose(key);
+  };
+  const choices = [
+    ...options.map((o) => ({ key: o.key, label: o.label, detail: `Usa tu suscripción · ${o.model}`, icon: Terminal })),
+    { key: 'ollama', label: 'Modelo local (Ollama)', detail: 'Descarga un modelo pequeño y corre sin internet', icon: Cpu },
+  ];
+  return (
+    <div className="flex flex-col gap-2 mb-8">
+      <p className="text-sm mb-2 text-center" style={{ color: 'var(--color-text-secondary)' }}>
+        Encontré estos CLIs instalados. ¿Con cuál quieres que piense JARVIS?
+      </p>
+      {choices.map(({ key, label, detail, icon: Icon }) => (
+        <button
+          key={key}
+          type="button"
+          disabled={picked !== null}
+          onClick={() => pick(key)}
+          className="flex items-center gap-4 px-5 py-4 rounded-xl text-left transition-all disabled:opacity-60"
+          style={{
+            background: picked === key ? 'var(--color-accent-subtle)' : 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            cursor: picked ? 'default' : 'pointer',
+          }}
+        >
+          <div
+            className="w-10 h-10 rounded-lg flex items-center justify-center shrink-0"
+            style={{ background: 'var(--color-bg-tertiary)', color: 'var(--color-accent)' }}
+          >
+            <Icon size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>
+              {label}
+            </div>
+            <div className="text-xs truncate" style={{ color: 'var(--color-text-tertiary)' }}>
+              {detail}
+            </div>
+          </div>
+          {picked === key && (
+            <Loader2 size={18} className="animate-spin shrink-0" style={{ color: 'var(--color-accent)' }} />
+          )}
+        </button>
+      ))}
+      <p className="text-xs mt-2 text-center" style={{ color: 'var(--color-text-tertiary)' }}>
+        Puedes cambiar de modelo después desde el chat.
+      </p>
+    </div>
+  );
+}
+
 export function SetupScreen({ onReady }: { onReady: () => void }) {
   const [status, setStatus] = useState<SetupStatus | null>(null);
+  const choosing = status?.phase === 'choose_engine' && !!status.cli_options?.length;
   const poll = useCallback(async () => {
     const s = await getSetupStatus();
     if (s) setStatus(s);
@@ -115,7 +177,12 @@ export function SetupScreen({ onReady }: { onReady: () => void }) {
           </p>
         </div>
 
+        {choosing && (
+          <EngineChoice options={status!.cli_options!} onChoose={(key) => void chooseEngine(key)} />
+        )}
+
         {/* Steps */}
+        {!choosing && (
         <div className="flex flex-col gap-2 mb-8">
           {STEPS.map((step) => (
             <StepRow
@@ -132,6 +199,7 @@ export function SetupScreen({ onReady }: { onReady: () => void }) {
             />
           ))}
         </div>
+        )}
 
         {/* Error */}
         {status?.error && (
@@ -149,7 +217,7 @@ export function SetupScreen({ onReady }: { onReady: () => void }) {
         )}
 
         {/* Progress bar */}
-        {!status?.error && (
+        {!status?.error && !choosing && (
           <div
             className="h-1 rounded-full overflow-hidden"
             style={{ background: 'var(--color-bg-tertiary)' }}

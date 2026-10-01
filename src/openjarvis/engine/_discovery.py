@@ -30,7 +30,32 @@ _HOST_MAP: Dict[str, str | None] = {
     "claude_cli": None,
     "gemini_cli": None,
     "antigravity_cli": None,
+    "kiro_cli": None,
 }
+
+
+CLI_ENGINE_LABELS: Dict[str, str] = {
+    "claude_cli": "Claude Code",
+    "kiro_cli": "Kiro",
+    "antigravity_cli": "Antigravity",
+    "gemini_cli": "Gemini CLI",
+}
+
+
+def detect_cli_engines() -> List[str]:
+    """Keys of the coding-agent CLI engines installed on this machine."""
+    from openjarvis.core.config import CLI_ENGINE_MODELS
+
+    installed: List[str] = []
+    for key in CLI_ENGINE_MODELS:
+        if not EngineRegistry.contains(key):
+            continue
+        try:
+            if EngineRegistry.get(key)().health():
+                installed.append(key)
+        except Exception as exc:
+            logger.debug("CLI engine %r probe failed: %s", key, exc)
+    return installed
 
 
 def _make_engine(key: str, config: JarvisConfig) -> InferenceEngine:
@@ -177,4 +202,10 @@ def get_engine(
     return healthy[0] if healthy else None
 
 
-__all__ = ["discover_engines", "discover_models", "get_engine"]
+__all__ = [
+    "CLI_ENGINE_LABELS",
+    "detect_cli_engines",
+    "discover_engines",
+    "discover_models",
+    "get_engine",
+]

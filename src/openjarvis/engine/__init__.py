@@ -8,6 +8,7 @@ import importlib
 import openjarvis.engine.antigravity_cli  # noqa: F401
 import openjarvis.engine.claude_cli  # noqa: F401
 import openjarvis.engine.gemini_cli  # noqa: F401
+import openjarvis.engine.kiro_cli  # noqa: F401
 import openjarvis.engine.ollama  # noqa: F401
 import openjarvis.engine.openai_compat_engines  # noqa: F401
 from openjarvis.engine._base import (

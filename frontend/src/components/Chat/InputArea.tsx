@@ -10,7 +10,7 @@ import { WAKE_EVENT, INTERRUPT_EVENT, markCommandSent } from '../../hooks/useWak
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 // model_switch reports the model that answers now as "(claude-cli/haiku)".
-const ACTIVE_MODEL_RE = /\(((?:claude-cli|antigravity|gemini-cli)\/[^)\s]+)\)/;
+const ACTIVE_MODEL_RE = /\(((?:claude-cli|antigravity|gemini-cli|kiro-cli)\/[^)\s]+)\)/;
 // Tools that take minutes: spoken up front so the wait is not silent.
 const SLOW_TOOL_ACKS: Record<string, string> = {
   browser_task: 'Voy al navegador, señor; esto puede tardar un par de minutos.',
@@ -370,7 +370,7 @@ export function InputArea() {
         accumulatedContent = 'No response was generated. Please try again.';
       }
       const totalMs = Date.now() - startTime;
-      const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'MiniMax-', 'chatgpt-', 'antigravity/'];
+      const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'MiniMax-', 'chatgpt-', 'antigravity/', 'kiro-cli/'];
       // No inference but a tool ran: a fast path answered without a model.
       const modelLabel = modelsUsed.length
         ? modelsUsed.join(' → ')

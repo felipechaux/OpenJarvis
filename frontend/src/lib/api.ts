@@ -69,6 +69,21 @@ export interface SetupStatus {
   server_ready: boolean;
   model_ready: boolean;
   error: string | null;
+  /** Installed CLIs to pick from while ``phase`` is ``choose_engine``. */
+  cli_options?: CliOption[];
+}
+
+export interface CliOption {
+  key: string;
+  label: string;
+  model: string;
+}
+
+/** Answer the setup screen's engine question: a CLI engine key or ``ollama``. */
+export async function chooseEngine(choice: string): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('choose_engine', { choice });
 }
 
 export async function getSetupStatus(): Promise<SetupStatus | null> {
@@ -148,7 +163,7 @@ export async function deleteModel(modelName: string): Promise<void> {
   }
 }
 
-const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'antigravity/'];
+const _CLOUD_PREFIXES = ['gpt-', 'o1-', 'o3-', 'o4-', 'claude-', 'gemini-', 'openrouter/', 'antigravity/', 'kiro-cli/'];
 
 export async function preloadModel(modelName: string): Promise<void> {
   // Cloud models don't need Ollama preloading

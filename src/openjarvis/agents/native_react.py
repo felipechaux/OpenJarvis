@@ -852,6 +852,7 @@ _PROVIDER_NAMES = {
     "claude-cli": "Claude",
     "antigravity": "Antigravity",
     "gemini-cli": "Gemini API",
+    "kiro-cli": "Kiro",
 }
 
 
