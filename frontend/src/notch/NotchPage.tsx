@@ -1,8 +1,24 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, Copy, FileDown, Mic, SendHorizontal, ShieldAlert, Square } from 'lucide-react';
+import {
+  Check,
+  Copy,
+  FileDown,
+  Mic,
+  Pause,
+  Play,
+  SendHorizontal,
+  ShieldAlert,
+  SkipBack,
+  SkipForward,
+  Square,
+  SquareTerminal,
+} from 'lucide-react';
+import { useNowPlaying, type MediaAction, type NowPlaying } from './media';
 import {
   answerPrompt,
   cliLabel,
+  messageSession,
+  openSession,
   shortDuration,
   useLiveSessions,
   type LiveSession,
@@ -13,7 +29,9 @@ import {
   NOTCH_COMMAND_EVENT,
   NOTCH_DOCK_EVENT,
   NOTCH_EVENT,
+  NOTCH_GAZE_EVENT,
   NOTCH_HOVER_EVENT,
+  NOTCH_SHORTCUT,
   NOTCH_LEVEL_EVENT,
   fileMessage,
   type NotchCommand,
@@ -261,21 +279,90 @@ function PromptCard({
   );
 }
 
-function SessionChips({ sessions }: { sessions: LiveSession[] }) {
+/// One chip per live session.  Clicking a chip points the text box at that
+/// session (again: back to JARVIS); its terminal button opens the session.
+function SessionChips({
+  sessions,
+  target,
+  onTarget,
+}: {
+  sessions: LiveSession[];
+  target: string;
+  onTarget: (name: string) => void;
+}) {
   if (!sessions.length) return null;
   return (
     <div className="notch__sessions" onClick={(e) => e.stopPropagation()}>
       {sessions.map((s) => (
         <span
           key={s.name}
-          className={`notch__chip notch__chip--${s.status}`}
-          title={s.edited.length ? `Editados: ${s.edited.join(', ')}` : cliLabel(s.cli)}
+          role="button"
+          tabIndex={-1}
+          className={[
+            'notch__chip',
+            `notch__chip--${s.status}`,
+            s.name === target ? 'notch__chip--target' : '',
+          ].join(' ')}
+          title={
+            (s.name === target ? 'Volver a hablar con JARVIS' : `Escribirle a ${s.project}`) +
+            (s.edited.length ? ` · Editados: ${s.edited.join(', ')}` : '')
+          }
+          onClick={() => onTarget(s.name === target ? '' : s.name)}
         >
           <i aria-hidden />
           <b>{s.project}</b>
           {sessionStatus(s)}
+          <button
+            type="button"
+            className="notch__chip-open"
+            title="Abrir la terminal"
+            onClick={(e) => {
+              e.stopPropagation();
+              openSession(s.name);
+            }}
+          >
+            <SquareTerminal size={12} />
+          </button>
         </span>
       ))}
+    </div>
+  );
+}
+
+/// Spotify's current track with previous / play-pause / next.
+function NowPlayingRow({ now, onControl }: { now: NowPlaying; onControl: (a: MediaAction) => void }) {
+  if (now.state === 'none') return null;
+  const playing = now.state === 'playing';
+  return (
+    <div className="notch__media" onClick={(e) => e.stopPropagation()}>
+      {now.art ? (
+        <img className="notch__media-art" src={now.art} alt="" />
+      ) : (
+        <span className="notch__media-art notch__media-art--blank" aria-hidden />
+      )}
+      <div className="notch__media-text">
+        <b>{now.title || 'Spotify'}</b>
+        <span>{now.artist}</span>
+      </div>
+      <span className={`notch__eq${playing ? ' notch__eq--on' : ''}`} aria-hidden>
+        <i />
+        <i />
+        <i />
+      </span>
+      <button type="button" className="notch__btn" title="Anterior" onClick={() => onControl('previous')}>
+        <SkipBack size={14} />
+      </button>
+      <button
+        type="button"
+        className="notch__btn"
+        title={playing ? 'Pausar' : 'Reproducir'}
+        onClick={() => onControl(playing ? 'pause' : 'play')}
+      >
+        {playing ? <Pause size={14} /> : <Play size={14} />}
+      </button>
+      <button type="button" className="notch__btn" title="Siguiente" onClick={() => onControl('next')}>
+        <SkipForward size={14} />
+      </button>
     </div>
   );
 }
@@ -310,6 +397,15 @@ export function NotchPage() {
   const [answered, setAnswered] = useState<string[]>([]);
   const asking = sessions.find((s) => s.prompt && !answered.includes(s.prompt.id));
   const sessionsWorking = sessions.filter((s) => s.status === 'working').length;
+  const [now, mediaControl] = useNowPlaying();
+  const music = now.state === 'playing';
+  // The session the text box writes to ('' = JARVIS); dropped when it ends.
+  const [target, setTarget] = useState('');
+  const targetSession = sessions.find((s) => s.name === target);
+  const [sendError, setSendError] = useState('');
+  // The reactor's reaction to being poked: one click squishes, three spin it.
+  const [mood, setMood] = useState<'' | 'squish' | 'dizzy'>('');
+  const moodTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const dragging = useFileDrop((paths) => {
     const [path] = paths;
@@ -347,6 +443,69 @@ export function NotchPage() {
     if (chime && state.earcons) playEarcon(chime);
     setAnswered((a) => (a.some((id) => !prompts.has(id)) ? a.filter((id) => prompts.has(id)) : a));
   }, [sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (target && !targetSession) setTarget('');
+  }, [target, targetSession]);
+
+  // The reactor leans towards the cursor (src-tauri sends `notch:gaze` while
+  // the cursor is near the notch); written as CSS variables, no re-render.
+  useEffect(() => {
+    let unlisten = () => {};
+    import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen<[number, number]>(NOTCH_GAZE_EVENT, ({ payload: [x, y] }) => {
+          pill.current?.style.setProperty('--gx', x.toFixed(3));
+          pill.current?.style.setProperty('--gy', y.toFixed(3));
+        }),
+      )
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => unlisten();
+  }, []);
+
+  // ⌥Space from anywhere: open the pill with the cursor in the text box
+  // (again while typing: close it and hand the keyboard back).
+  const shortcutRef = useRef(() => {});
+  shortcutRef.current = () => {
+    if (open && typing) {
+      done();
+      setOpen(false);
+      return;
+    }
+    if (state.earcons && !open) playEarcon('reveal');
+    setOpen(true);
+    keyboard(true);
+    setTimeout(() => input.current?.focus(), 80);
+  };
+  useEffect(() => {
+    let active = true;
+    import('@tauri-apps/plugin-global-shortcut')
+      .then(async ({ register, unregister }) => {
+        await unregister(NOTCH_SHORTCUT).catch(() => {});
+        if (!active) return;
+        await register(NOTCH_SHORTCUT, (e) => {
+          if (e.state === 'Pressed') shortcutRef.current();
+        });
+      })
+      .catch((err) => console.warn('[notch] shortcut not registered', err));
+    return () => {
+      active = false;
+      import('@tauri-apps/plugin-global-shortcut')
+        .then(({ unregister }) => unregister(NOTCH_SHORTCUT))
+        .catch(() => {});
+    };
+  }, []);
+
+  const poke = (next: 'squish' | 'dizzy') => {
+    clearTimeout(moodTimer.current);
+    setMood('');
+    requestAnimationFrame(() => setMood(next)); // restart the animation
+    moodTimer.current = setTimeout(() => setMood(''), next === 'dizzy' ? 1400 : 600);
+    if (next === 'dizzy' && state.earcons) playEarcon('scan');
+  };
 
   const answer = async (session: LiveSession, option: PromptOption) => {
     const id = session.prompt!.id;
@@ -472,12 +631,29 @@ export function NotchPage() {
     input.current?.blur();
     keyboard(false);
   };
-  const send = () => {
+  const send = async () => {
     const message = draft.trim();
     if (!message) return;
-    command({ type: 'send', text: message });
+    setSendError('');
+    if (!target) {
+      command({ type: 'send', text: message });
+      setDraft('');
+      done();
+      return;
+    }
     setDraft('');
-    done();
+    if (await messageSession(target, message)) {
+      if (state.earcons) playEarcon('session');
+      done();
+    } else {
+      setDraft(message); // keep it to retry
+      setSendError(
+        targetSession?.status === 'prompt'
+          ? 'La sesión espera que respondas su pregunta primero.'
+          : 'No pude escribir en la sesión.',
+      );
+      if (state.earcons) playEarcon('error');
+    }
   };
 
   const copy = async () => {
@@ -490,6 +666,7 @@ export function NotchPage() {
 
   const busy = presence === 'thinking' || presence === 'speaking';
   const peek = hover && !open && !dragging && !swallowed && !asking && presence === 'idle';
+  const track = music && now.title ? `♪ ${now.title}${now.artist ? ` · ${now.artist}` : ''} · ` : '';
   const sessionsHint = sessions.length
     ? `${sessions.length} sesión${sessions.length === 1 ? '' : 'es'}` +
       (sessionsWorking ? ` · ${sessionsWorking} trabajando` : '') +
@@ -498,7 +675,7 @@ export function NotchPage() {
   const status = swallowed
     ? `Revisando ${swallowed}`
     : peek
-      ? `${sessionsHint}Clic para abrir · suelta un archivo aquí`
+      ? `${track}${sessionsHint}Clic para abrir · ⌥Espacio`
       : text || LABELS[presence];
   // Open header: a short state, never the spoken sentence (that is
   // highlighted in the reply below).
@@ -515,12 +692,27 @@ export function NotchPage() {
     swallowed ? 'notch--swallow' : '',
     asking && !open && !dragging ? 'notch--asking' : '',
     sessionsWorking ? 'notch--sessions-busy' : '',
+    music ? 'notch--music' : '',
+    mood ? `notch--${mood}` : '',
   ].join(' ');
   const collapsed = presence === 'idle' && !open && !peek && !dragging && !swallowed && !asking;
   const height = collapsed ? ROW_H : ROW_H + bodyH;
 
   return (
-    <div ref={pill} className={classes} style={{ height }} aria-live="polite" onClick={toggle}>
+    <div
+      ref={pill}
+      className={classes}
+      style={{ height }}
+      aria-live="polite"
+      onClick={(e) => {
+        // Poking the reactor: one click squishes it, a triple click spins it.
+        if ((e.target as HTMLElement).closest('.notch__reactor, .notch__head .arc-reactor')) {
+          if (e.detail === 1) poke('squish');
+          if (e.detail === 3) poke('dizzy');
+        }
+        if (e.detail === 1) toggle();
+      }}
+    >
       <div className="notch__row">
         <span className="notch__reactor">
           <ArcReactor size={REACTOR_ROW} presence={presence} getAudioData={getAudioData} />
@@ -550,7 +742,8 @@ export function NotchPage() {
               </div>
             </div>
             {asking && <PromptCard session={asking} onAnswer={answer} />}
-            <SessionChips sessions={sessions} />
+            <SessionChips sessions={sessions} target={target} onTarget={setTarget} />
+            <NowPlayingRow now={now} onControl={mediaControl} />
             <div
               ref={reply}
               className="notch__reply"
@@ -605,9 +798,14 @@ export function NotchPage() {
                 <input
                   ref={input}
                   value={draft}
-                  placeholder="Escríbele a JARVIS…"
+                  placeholder={
+                    targetSession ? `Escríbele a ${targetSession.project}…` : 'Escríbele a JARVIS…'
+                  }
                   spellCheck={false}
-                  onChange={(e) => setDraft(e.target.value)}
+                  onChange={(e) => {
+                    setDraft(e.target.value);
+                    setSendError('');
+                  }}
                   onMouseDown={() => keyboard(true)}
                   onFocus={() => setTyping(true)}
                   onBlur={() => setTyping(false)}
@@ -620,6 +818,7 @@ export function NotchPage() {
                 </button>
               </form>
             </div>
+            {sendError && <div className="notch__error">{sendError}</div>}
           </div>
         ) : (
           <div ref={line} className="notch__line">

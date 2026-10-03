@@ -162,3 +162,36 @@ def test_answer_unknown_session(session):
     client, _, _ = session
     r = client.post("/v1/coding-sessions/jarvis-nope/answer", json={"prompt_id": "x", "key": "1"})
     assert r.json()["ok"] is False
+
+
+def test_message_is_typed_into_the_session(session, monkeypatch):
+    client, screen, _ = session
+    typed = []
+    monkeypatch.setattr(sc, "type_message", lambda name, text: typed.append((name, text)))
+    screen["text"] = "> listo\n"
+    r = client.post("/v1/coding-sessions/jarvis-app/message", json={"text": " corre los tests "})
+    assert r.json() == {"ok": True}
+    assert typed == [("jarvis-app", "corre los tests")]
+
+
+def test_message_refused_while_a_menu_shows(session, monkeypatch):
+    client, _, _ = session
+    typed = []
+    monkeypatch.setattr(sc, "type_message", lambda name, text: typed.append(text))
+    r = client.post("/v1/coding-sessions/jarvis-app/message", json={"text": "hola"})
+    assert r.json()["ok"] is False
+    assert typed == []
+
+
+def test_message_needs_json(session, monkeypatch):
+    client, screen, _ = session
+    typed = []
+    monkeypatch.setattr(sc, "type_message", lambda name, text: typed.append(text))
+    screen["text"] = "> listo\n"
+    r = client.post(
+        "/v1/coding-sessions/jarvis-app/message",
+        content='{"text": "rm -rf /"}',
+        headers={"content-type": "text/plain"},
+    )
+    assert r.json()["ok"] is False
+    assert typed == []

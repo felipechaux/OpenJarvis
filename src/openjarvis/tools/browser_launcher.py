@@ -37,7 +37,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from urllib.parse import quote, urlsplit
 
 from openjarvis.core.registry import ToolRegistry
@@ -318,6 +318,134 @@ def _js_error_hint(kind: str, err: str) -> str:
             f" Enable 'Allow JavaScript from Apple Events' in {menu} and try again."
         )
     return ""
+
+
+# ── Spotify without touching the user's tabs (desktop notch) ────────────
+# The tool above brings the Spotify tab to the front because it runs JS in
+# the active tab.  The notch polls what is playing every few seconds and
+# its buttons must not steal focus, so these run JS in the Spotify tab
+# where it is, by window/tab index (cached, re-found when it moves).
+
+_RUN_JS_IN_TAB = {
+    "arc": """on run argv
+  set w to (item 1 of argv) as integer
+  set k to (item 2 of argv) as integer
+  tell application "Arc" to tell window w to tell tab k
+    return execute javascript (item 3 of argv)
+  end tell
+end run""",
+    "chrome": """on run argv
+  set w to (item 1 of argv) as integer
+  set k to (item 2 of argv) as integer
+  tell application "Google Chrome"
+    return execute tab k of window w javascript (item 3 of argv)
+  end tell
+end run""",
+    "safari": """on run argv
+  set w to (item 1 of argv) as integer
+  set k to (item 2 of argv) as integer
+  tell application "Safari"
+    return do JavaScript (item 3 of argv) in tab k of window w
+  end tell
+end run""",
+}
+
+# What the player shows: the Media Session metadata Spotify publishes (with
+# the DOM as a fallback), as JSON.  ``host`` lets the caller notice that the
+# cached window/tab index now points at another page.
+_NOW_PLAYING_JS = """(() => {
+  const q = s => document.querySelector(s);
+  const host = location.host;
+  const pp = q('[data-testid="control-button-playpause"]');
+  if (!pp) return JSON.stringify({host, state: 'none'});
+  const m = navigator.mediaSession && navigator.mediaSession.metadata;
+  const text = s => ((q(s) || {}).textContent || '').trim();
+  const art = m && m.artwork && m.artwork.length
+    ? m.artwork[m.artwork.length - 1].src
+    : ((q('[data-testid="now-playing-widget"] img') || {}).src || '');
+  return JSON.stringify({
+    host,
+    state: /^(pause|pausar)/i.test(pp.getAttribute('aria-label') || '') ? 'playing' : 'paused',
+    title: (m && m.title) || text('[data-testid="context-item-info-title"]'),
+    artist: (m && m.artist) || text('[data-testid="context-item-info-artist"]'),
+    art,
+  });
+})()"""
+
+_spotify_tab: Optional[Tuple[str, int, int]] = None
+
+
+def _unquote(out: str) -> str:
+    if len(out) >= 2 and out[0] == out[-1] == '"':
+        try:
+            return json.loads(out)
+        except json.JSONDecodeError:
+            return out[1:-1]
+    return out
+
+
+def run_js_in_tab(kind: str, window: int, tab: int, js: str) -> str:
+    """Run ``js`` in a given tab without selecting it or raising the browser."""
+    return _unquote(_osascript(_RUN_JS_IN_TAB[kind], str(window), str(tab), js, timeout=6))
+
+
+def _spotify_browser_kind() -> Optional[str]:
+    cfg = _launcher_config()
+    app, error = resolve_browser(_default_browser(), cfg)
+    if error or app is None:
+        return None
+    return _scriptable_kind(app.stem)
+
+
+def _in_spotify_tab(js: str, here: Callable[[str], bool]) -> Optional[str]:
+    """Run ``js`` in the open Spotify tab; None when there is none.
+
+    ``here(output)`` says whether the JS ran on Spotify; when the cached tab
+    index points elsewhere (tabs moved), the tab is looked up again once.
+    """
+    global _spotify_tab
+    for attempt in range(2):
+        if _spotify_tab is None or attempt:
+            kind = _spotify_browser_kind()
+            if kind is None:
+                return None
+            tabs = find_tabs(kind, _SPOTIFY_HOST)
+            if not tabs:
+                _spotify_tab = None
+                return None
+            _spotify_tab = (kind, tabs[0][0], tabs[0][1])
+        kind, window, tab = _spotify_tab
+        try:
+            out = run_js_in_tab(kind, window, tab, js)
+        except (subprocess.SubprocessError, OSError, RuntimeError):
+            continue
+        if here(out):
+            return out
+    return None
+
+
+def spotify_now_playing() -> Dict[str, Any]:
+    """``{"state": "playing"|"paused"|"none", "title", "artist", "art"}``."""
+    if sys.platform != "darwin":
+        return {"state": "none"}
+    try:
+        out = _in_spotify_tab(_NOW_PLAYING_JS, lambda o: _SPOTIFY_HOST in o)
+        data = json.loads(out) if out else {}
+    except (ValueError, TypeError):
+        data = {}
+    if data.get("host") != _SPOTIFY_HOST:
+        return {"state": "none"}
+    data.pop("host", None)
+    return data
+
+
+def spotify_control(action: str) -> bool:
+    """play / pause / next / previous in the Spotify tab, in the background."""
+    if action not in _ACTIONS or sys.platform != "darwin":
+        return False
+    guard = "if (location.host !== %s) return 'elsewhere';" % json.dumps(_SPOTIFY_HOST)
+    js = spotify_js(action).replace("(() => {", "(() => { " + guard, 1)
+    return _in_spotify_tab(js, lambda o: o != "elsewhere") in ("ok", "already")
 
 
 # ── Tools ───────────────────────────────────────────────────────────────

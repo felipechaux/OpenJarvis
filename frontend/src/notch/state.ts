@@ -28,6 +28,11 @@ export const MAIN_LABEL = 'main';
 export const NOTCH_COMMAND_EVENT = 'notch:command';
 /// The cursor entering (true) or leaving (false) the pill, from src-tauri.
 export const NOTCH_HOVER_EVENT = 'notch:hover';
+/// Cursor direction from the notch, `[x, y]` in -1..1, while it is near
+/// (src-tauri); `[0, 0]` when it moves away.
+export const NOTCH_GAZE_EVENT = 'notch:gaze';
+/// System-wide shortcut that opens the pill ready to type.
+export const NOTCH_SHORTCUT = 'Alt+Space';
 
 export type NotchCommand =
   /// Cut JARVIS off: stop speaking and drop the reply in flight.

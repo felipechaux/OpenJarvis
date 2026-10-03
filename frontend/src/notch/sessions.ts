@@ -126,3 +126,26 @@ export async function answerPrompt(session: string, promptId: string, key: strin
     return false;
   }
 }
+
+async function post(path: string, body: unknown): Promise<boolean> {
+  try {
+    const res = await fetch(`${getBase()}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return ((await res.json()) as { ok: boolean }).ok;
+  } catch {
+    return false;
+  }
+}
+
+/// Types the user's text into a session (refused while it shows a menu).
+export function messageSession(session: string, text: string): Promise<boolean> {
+  return post(`/v1/coding-sessions/${encodeURIComponent(session)}/message`, { text });
+}
+
+/// Opens the user's terminal attached to a session.
+export function openSession(session: string): Promise<boolean> {
+  return post(`/v1/coding-sessions/${encodeURIComponent(session)}/open`, {});
+}

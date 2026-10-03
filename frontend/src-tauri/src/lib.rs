@@ -1737,6 +1737,10 @@ mod notch {
     /// Cursor entered (true) or left (false) the pill.  Sent from here because
     /// the unfocused webview gets no reliable mouseenter/mouseleave.
     const HOVER_EVENT: &str = "notch:hover";
+    /// Cursor direction from the notch, `[x, y]` in -1..1, while it is
+    /// within GAZE_RANGE points; the reactor leans that way.
+    const GAZE_EVENT: &str = "notch:gaze";
+    const GAZE_RANGE: f64 = 420.0;
     /// Room for the expanded pill; the page draws inside it.
     const WIDTH: f64 = 560.0;
     const HEIGHT: f64 = 480.0;
@@ -1873,6 +1877,7 @@ mod notch {
             let mut last = at;
             let mut followed = Instant::now();
             let mut clickable = false;
+            let mut gaze = (0.0f64, 0.0f64);
             loop {
                 std::thread::sleep(TRACK_EVERY);
                 if followed.elapsed() >= FOLLOW_EVERY {
@@ -1885,10 +1890,20 @@ mod notch {
                 }
                 let w = f32::from_bits(HIT_W.load(Ordering::Relaxed)) as f64;
                 let h = f32::from_bits(HIT_H.load(Ordering::Relaxed)) as f64;
-                let over = cursor().is_some_and(|p| {
+                let at = cursor();
+                let over = at.is_some_and(|p| {
                     let left = last.0 + (WIDTH - w) / 2.0;
                     p.x >= left && p.x <= left + w && p.y >= last.1 && p.y <= last.1 + h
                 });
+                let next = at
+                    .map(|p| (p.x - (last.0 + WIDTH / 2.0), p.y - (last.1 + 19.0)))
+                    .filter(|(dx, dy)| dx.hypot(*dy) < GAZE_RANGE)
+                    .map(|(dx, dy)| ((dx / GAZE_RANGE).clamp(-1.0, 1.0), (dy / GAZE_RANGE).clamp(-1.0, 1.0)))
+                    .unwrap_or((0.0, 0.0));
+                if (next.0 - gaze.0).abs() > 0.02 || (next.1 - gaze.1).abs() > 0.02 || (next != gaze && next == (0.0, 0.0)) {
+                    gaze = next;
+                    let _ = win.emit_to(LABEL, GAZE_EVENT, [gaze.0, gaze.1]);
+                }
                 if over != clickable {
                     clickable = over;
                     let _ = win.set_ignore_cursor_events(!over);

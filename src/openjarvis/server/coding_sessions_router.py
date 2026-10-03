@@ -456,13 +456,8 @@ async def answer_prompt(name: str, request: Request) -> Dict[str, Any]:
 
     from openjarvis.tools import session_control as sc
 
-    if not request.headers.get("content-type", "").startswith("application/json"):
-        return {"ok": False, "error": "content-type must be application/json"}
-    try:
-        body = await request.json()
-    except Exception:  # noqa: BLE001
-        return {"ok": False, "error": "invalid body"}
-    if not isinstance(body, dict):
+    body = await _json_body(request)
+    if body is None:
         return {"ok": False, "error": "invalid body"}
     if not sc.has_session(name):
         return {"ok": False, "error": "no such session"}
@@ -474,6 +469,62 @@ async def answer_prompt(name: str, request: Request) -> Dict[str, Any]:
     if key not in {o["key"] for o in prompt["options"]}:
         return {"ok": False, "error": "not an option of this prompt"}
     await asyncio.to_thread(sc.press_keys, name, [key])
+    return {"ok": True}
+
+
+async def _json_body(request: Request) -> Dict[str, Any] | None:
+    """The body of a notch request, or None.  JSON content type is required
+    so other web pages (no CORS preflight allowed) cannot drive sessions."""
+    if not request.headers.get("content-type", "").startswith("application/json"):
+        return None
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return None
+    return body if isinstance(body, dict) else None
+
+
+@router.post("/{name}/message")
+async def message_session(name: str, request: Request) -> Dict[str, Any]:
+    """Type the user's message into a session, from the notch's text box.
+
+    Body: ``{"text": …}``.  Refused while the session shows a menu: Enter
+    would pick its highlighted option instead of sending the text.
+    """
+    import asyncio
+
+    from openjarvis.tools import session_control as sc
+
+    body = await _json_body(request)
+    text = str((body or {}).get("text") or "").strip()
+    if body is None or not text:
+        return {"ok": False, "error": "invalid body"}
+    if not sc.has_session(name):
+        return {"ok": False, "error": "no such session"}
+    screen = await asyncio.to_thread(sc.capture_screen, name, 40)
+    if session_watcher.parse_prompt(screen):
+        return {"ok": False, "error": "the session is waiting on a menu"}
+    await asyncio.to_thread(sc.type_message, name, text[:4000])
+    return {"ok": True}
+
+
+@router.post("/{name}/open")
+async def open_session(name: str, request: Request) -> Dict[str, Any]:
+    """Open the user's terminal attached to a session (notch chip)."""
+    import asyncio
+
+    from openjarvis.tools import session_control as sc
+    from openjarvis.tools.launcher import _launcher_config, _run_in_terminal
+
+    if await _json_body(request) is None:
+        return {"ok": False, "error": "invalid body"}
+    if not sc.has_session(name):
+        return {"ok": False, "error": "no such session"}
+    terminal = getattr(_launcher_config(), "terminal", "") or "Terminal"
+    try:
+        await asyncio.to_thread(_run_in_terminal, terminal, sc.attach_command(name))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:200]}
     return {"ok": True}
 
 

@@ -562,3 +562,174 @@ html.notch-window #root {
 .notch__panel:has(.notch__prompt) .notch__reply {
   max-height: 120px;
 }
+
+/* ── Music: the idle bars dance (session work keeps the amber bars) ── */
+.notch--idle.notch--music:not(.notch--sessions-busy) .notch__bars i {
+  background: #6fe39a;
+  opacity: 0.9;
+  animation: notch-wave 1.1s ease-in-out infinite;
+}
+
+/* ── Now playing row in the open panel ── */
+.notch__media {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 6px 6px 6px 6px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.notch__media-art {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  object-fit: cover;
+}
+.notch__media-art--blank {
+  background: linear-gradient(135deg, #1db954, #0b3d20);
+}
+.notch__media-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+.notch__media-text b,
+.notch__media-text span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notch__media-text b {
+  color: var(--notch-text);
+  font-weight: 600;
+}
+.notch__media-text span {
+  color: var(--notch-muted);
+  font-size: 11.5px;
+}
+.notch__media .notch__btn {
+  width: 28px;
+  height: 28px;
+  color: var(--notch-text);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+}
+.notch__eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+  margin-right: 4px;
+}
+.notch__eq i {
+  width: 3px;
+  height: 3px;
+  border-radius: 1px;
+  background: #6fe39a;
+}
+.notch__eq--on i {
+  animation: notch-eq 0.8s ease-in-out infinite;
+}
+.notch__eq--on i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.notch__eq--on i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+@keyframes notch-eq {
+  0%, 100% { height: 3px; }
+  50% { height: 14px; }
+}
+
+/* ── Session chips: pick one to write to it, open its terminal ── */
+.notch__chip {
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.notch__chip:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+.notch__chip--target {
+  border-color: rgba(94, 231, 255, 0.55);
+  background: rgba(94, 231, 255, 0.1);
+}
+.notch__chip-open {
+  display: inline-flex;
+  margin-left: 2px;
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--notch-muted);
+  cursor: pointer;
+}
+.notch__chip-open:hover {
+  color: var(--notch-accent);
+  background: rgba(94, 231, 255, 0.12);
+}
+.notch__error {
+  padding: 6px 4px 0;
+  color: #ff8a80;
+  font-size: 11.5px;
+}
+
+/* ── Reactor personality ── */
+/* Leans towards the cursor (--gx/--gy from notch:gaze). */
+.notch__reactor .arc-reactor,
+.notch__head .arc-reactor {
+  translate: calc(var(--gx, 0) * 3px) calc(var(--gy, 0) * 2px);
+  transition: translate 0.35s ease-out;
+}
+.notch__head .arc-reactor {
+  translate: calc(var(--gx, 0) * 6px) calc(var(--gy, 0) * 4px);
+}
+/* Idle: breathes, and now and then "blinks". */
+.notch--idle:not(.notch--docking):not(.notch--swallow) .notch__reactor {
+  animation:
+    notch-breathe 4.5s ease-in-out infinite,
+    notch-glint 7s linear infinite;
+}
+@keyframes notch-breathe {
+  0%, 100% { scale: 1; }
+  50% { scale: 1.07; }
+}
+@keyframes notch-glint {
+  0%, 90%, 100% { filter: none; }
+  93% { filter: brightness(0.35); }
+  96% { filter: brightness(1.3); }
+}
+/* Poked: one click squishes it like jelly, a triple click spins it. */
+.notch--squish .notch__reactor .arc-reactor,
+.notch--squish .notch__head .arc-reactor {
+  animation: notch-squish 0.55s var(--notch-spring);
+}
+.notch--dizzy .notch__reactor .arc-reactor,
+.notch--dizzy .notch__head .arc-reactor {
+  animation: notch-dizzy 1.35s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+@keyframes notch-squish {
+  0% { scale: 1; }
+  30% { scale: 1.25 0.72; }
+  55% { scale: 0.86 1.14; }
+  75% { scale: 1.06 0.95; }
+  100% { scale: 1; }
+}
+@keyframes notch-dizzy {
+  0% { rotate: 0deg; filter: none; }
+  60% { rotate: 760deg; filter: hue-rotate(90deg) brightness(1.4); }
+  80% { rotate: 700deg; filter: hue-rotate(-40deg); }
+  100% { rotate: 720deg; filter: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notch__reactor .arc-reactor,
+  .notch__head .arc-reactor {
+    translate: none;
+  }
+}
