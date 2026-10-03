@@ -8,7 +8,6 @@ import { GetStartedPage } from './pages/GetStartedPage';
 import { AgentsPage } from './pages/AgentsPage';
 import { DataSourcesPage } from './pages/DataSourcesPage';
 import { LogsPage } from './pages/LogsPage';
-import { CompanionPage } from './pages/CompanionPage';
 import { CommandPalette } from './components/CommandPalette';
 import { SetupScreen } from './components/SetupScreen';
 import { Toaster } from './components/ui/sonner';
@@ -17,7 +16,7 @@ import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } fr
 import { OptInModal } from './components/OptInModal';
 import { BootIntro } from './components/BootIntro';
 import { useWakeWord } from './hooks/useWakeWord';
-import { useCompanionMode } from './hooks/useCompanionMode';
+import { useMainWindow } from './hooks/useMainWindow';
 import { useEarcons, useInteractionEarcons } from './hooks/useEarcons';
 import { useNotchBridge } from './hooks/useNotchBridge';
 import { useSessionAnnouncements } from './hooks/useSessionAnnouncements';
@@ -30,7 +29,7 @@ const INTRO_PLAYED_KEY = 'jarvis-intro-played';
 /// forces it, e.g. to preview it in a plain browser.
 function shouldPlayIntro(enabled: boolean): boolean {
   if (new URLSearchParams(window.location.search).has('intro')) return true;
-  if (!isTauri() || !enabled || window.location.pathname.includes('companion')) return false;
+  if (!isTauri() || !enabled) return false;
   try {
     if (sessionStorage.getItem(INTRO_PLAYED_KEY)) return false;
     sessionStorage.setItem(INTRO_PLAYED_KEY, '1');
@@ -46,7 +45,14 @@ export default function App() {
     shouldPlayIntro(useAppStore.getState().settings.bootIntro),
   );
   const endIntro = useCallback(() => setShowIntro(false), []);
+  // The reactor has reached the notch: the window hides then, before the
+  // intro fades out and would reveal the page under it.
+  const [introDocked, setIntroDocked] = useState(false);
+  const dockIntro = useCallback(() => setIntroDocked(true), []);
   const handleSetupReady = useCallback(() => setSetupDone(true), []);
+  // Setup needs the user (engine choice, error): the window must show.
+  const [setupAttention, setSetupAttention] = useState(false);
+  const handleSetupAttention = useCallback(() => setSetupAttention(true), []);
   const setModels = useAppStore((s) => s.setModels);
   const setModelsLoading = useAppStore((s) => s.setModelsLoading);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
@@ -73,15 +79,6 @@ export default function App() {
     if (settings.theme === 'dark') root.classList.add('dark');
     else if (settings.theme === 'light') root.classList.add('light');
   }, [settings.theme]);
-
-  // Sync overlay conversations into the main app
-  const importOverlay = useAppStore((s) => s.importOverlayConversation);
-  useEffect(() => {
-    if (!isTauri()) return;
-    importOverlay();
-    const interval = setInterval(importOverlay, 5000);
-    return () => clearInterval(interval);
-  }, [importOverlay]);
 
   // Fetch models on mount, retrying until the backend is reachable.
   //
@@ -201,7 +198,7 @@ export default function App() {
 
   const speechEnabled = useAppStore((s) => s.settings.speechEnabled);
   useWakeWord(setupDone && speechEnabled);
-  useCompanionMode({ registerShortcut: setupDone });
+  useMainWindow({ setupDone, setupAttention, introPlaying: showIntro && !introDocked });
   useEarcons();
   useInteractionEarcons();
   useNotchBridge();
@@ -258,6 +255,7 @@ export default function App() {
       lang={settings.language === 'en' ? 'en' : 'es'}
       sound={settings.earcons}
       onDone={endIntro}
+      onDock={dockIntro}
     />
   );
 
@@ -266,7 +264,7 @@ export default function App() {
   return (
     <>
       {!setupDone ? (
-        <SetupScreen onReady={handleSetupReady} />
+        <SetupScreen onReady={handleSetupReady} onAttention={handleSetupAttention} />
       ) : (
         <>
           <Routes>
@@ -279,7 +277,6 @@ export default function App() {
               <Route path="agents" element={<AgentsPage />} />
               <Route path="logs" element={<LogsPage />} />
             </Route>
-            <Route path="companion" element={<CompanionPage />} />
           </Routes>
           <Toaster position="bottom-right" />
           {commandPaletteOpen && <CommandPalette />}

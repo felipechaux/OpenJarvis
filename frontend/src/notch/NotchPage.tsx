@@ -3,6 +3,8 @@ import {
   Check,
   Copy,
   FileDown,
+  Maximize2,
+  Minimize2,
   Mic,
   Pause,
   Play,
@@ -65,6 +67,9 @@ const REACTOR_OPEN = 64;
 const DOCK_MS = 1700;
 // How long a dropped file's name shows while JARVIS takes it.
 const SWALLOW_MS = 2200;
+// A click on the reactor waits this long before opening/closing the pill, so
+// a double or triple click (which pokes it) does not move it mid-click.
+const MULTI_CLICK_MS = 380;
 
 const PREVIEW = new URLSearchParams(window.location.search);
 
@@ -158,6 +163,33 @@ async function command(cmd: NotchCommand) {
   } catch {
     console.log('[notch] command (preview):', cmd);
   }
+}
+
+/// Opens or hides JARVIS's main window (history, settings…): the
+/// "advanced" view.
+async function setMainWindow(visible: boolean) {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('main_window', { visible });
+  } catch {
+    /* plain browser (preview) */
+  }
+}
+
+/// Whether the main window is open (src-tauri sends `notch:main-window`).
+function useMainWindowOpen(): boolean {
+  const [isOpen, setIsOpen] = useState(false);
+  useEffect(() => {
+    let unlisten = () => {};
+    import('@tauri-apps/api/event')
+      .then(({ listen }) => listen<boolean>('notch:main-window', (e) => setIsOpen(e.payload)))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {});
+    return () => unlisten();
+  }, []);
+  return isOpen;
 }
 
 /// Lets the text box take the keyboard, or hands it back to the user's app.
@@ -368,7 +400,7 @@ function NowPlayingRow({ now, onControl }: { now: NowPlaying; onControl: (a: Med
 }
 
 /// Dynamic-Island-style pill that grows out of the MacBook notch, with the
-/// same arc reactor as companion mode.  Runs in its own window (src-tauri
+/// same arc reactor as the chat.  Runs in its own window (src-tauri
 /// `notch` mod) that only takes clicks over the pill.  It renders what the
 /// main window sends and sends commands back (`notch:command`): hovering
 /// peeks, clicking opens JARVIS's last reply with controls (talk, stop, copy)
@@ -392,6 +424,7 @@ export function NotchPage() {
   const [bodyH, setBodyH] = useState(0);
   const { presence, text } = state;
   const getAudioData = useVoiceLevel(presence);
+  const mainOpen = useMainWindowOpen();
   const sessions = useLiveSessions();
   // Prompts already answered here, hidden until the next poll drops them.
   const [answered, setAnswered] = useState<string[]>([]);
@@ -406,6 +439,7 @@ export function NotchPage() {
   // The reactor's reaction to being poked: one click squishes, three spin it.
   const [mood, setMood] = useState<'' | 'squish' | 'dizzy'>('');
   const moodTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const clickTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const dragging = useFileDrop((paths) => {
     const [path] = paths;
@@ -705,10 +739,17 @@ export function NotchPage() {
       style={{ height }}
       aria-live="polite"
       onClick={(e) => {
-        // Poking the reactor: one click squishes it, a triple click spins it.
+        // Poking the reactor: one click squishes it (and, unless more clicks
+        // follow, opens/closes the pill); a triple click spins it.
         if ((e.target as HTMLElement).closest('.notch__reactor, .notch__head .arc-reactor')) {
-          if (e.detail === 1) poke('squish');
-          if (e.detail === 3) poke('dizzy');
+          clearTimeout(clickTimer.current);
+          if (e.detail === 1) {
+            poke('squish');
+            clickTimer.current = setTimeout(toggle, MULTI_CLICK_MS);
+          } else if (e.detail === 3) {
+            poke('dizzy');
+          }
+          return;
         }
         if (e.detail === 1) toggle();
       }}
@@ -740,6 +781,18 @@ export function NotchPage() {
                 <div className="notch__brand">J.A.R.V.I.S</div>
                 <div className="notch__status">{headStatus}</div>
               </div>
+              <button
+                type="button"
+                className="notch__btn notch__expand"
+                title={mainOpen ? 'Ocultar la ventana de JARVIS (⌘⇧J)' : 'Abrir JARVIS completo (⌘⇧J)'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  setMainWindow(!mainOpen);
+                }}
+              >
+                {mainOpen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
             </div>
             {asking && <PromptCard session={asking} onAnswer={answer} />}
             <SessionChips sessions={sessions} target={target} onTarget={setTarget} />

@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "J.A.R.V.I.S",
+        "visible": false,
+        "backgroundThrottling": "disabled",
         "width": 1340,
         "height": 860,
         "minWidth": 900,
@@ -33,7 +35,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob:; media-src 'self' blob: http://localhost:* http://127.0.0.1:*"
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; img-src 'self' data: blob: https://i.scdn.co https://*.scdn.co; media-src 'self' blob: http://localhost:* http://127.0.0.1:*"
     },
     "macOSPrivateApi": true
   },

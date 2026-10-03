@@ -188,7 +188,7 @@ function Spin({ dur, boost, ccw, className = '', children }: SpinProps) {
 }
 
 function HudLayers({ uid, compact }: { uid: string; compact: boolean }) {
-  // Hairlines disappear at companion size — thicken them a touch.
+  // Hairlines disappear at small sizes — thicken them a touch.
   const hair = compact ? 0.8 : 0.5;
   const textPathId = `arc-text-${uid}`;
   const C = '#00d4ff';
@@ -216,7 +216,7 @@ function HudLayers({ uid, compact }: { uid: string; compact: boolean }) {
         ))}
       </Spin>
 
-      {/* Readout text + compass labels (hidden at companion size) */}
+      {/* Readout text + compass labels (hidden at small sizes) */}
       {!compact && (
         <Spin dur={260} boost={20} className="arc-dim arc-readout">
           <defs>

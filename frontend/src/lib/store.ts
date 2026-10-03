@@ -90,6 +90,8 @@ interface Settings {
   speakingHud: boolean;
   /** Arc-reactor power-up intro with its sound when the app launches (BootIntro). */
   bootIntro: boolean;
+  /** Show the main window when JARVIS starts; off = only the notch. */
+  openWindowOnLaunch: boolean;
   language: AssistantLanguage;
 }
 
@@ -108,6 +110,7 @@ function loadSettings(): Settings {
     earcons: true,
     speakingHud: true,
     bootIntro: true,
+    openWindowOnLaunch: false,
     language: 'es',
   };
   try {
@@ -172,7 +175,6 @@ interface AppState {
 
   // Actions: conversations
   loadConversations: () => void;
-  importOverlayConversation: () => Promise<void>;
   createConversation: (model?: string) => string;
   selectConversation: (id: string) => void;
   deleteConversation: (id: string) => void;
@@ -250,7 +252,7 @@ interface AppState {
   setTTSAudioData: (data: AudioAnalyzerData) => void;
 
   // Mic capture state — mirrored from useSpeech so presence visuals
-  // (ArcReactor, companion) can react to the user's voice.
+  // (ArcReactor, notch) can react to the user's voice.
   speechState: SpeechState;
   micLevel: number;
   setSpeechState: (state: SpeechState) => void;
@@ -306,36 +308,6 @@ export const useAppStore = create<AppState>((set, get) => {
         ),
         activeId: store.activeId,
       });
-    },
-
-    importOverlayConversation: async () => {
-      try {
-        const { invoke } = await import('@tauri-apps/api/core');
-        const raw = await invoke<string>('get_overlay_conversation');
-        if (!raw || raw === '[]') return;
-        const overlay = JSON.parse(raw);
-        if (!overlay.id || !overlay.messages?.length) return;
-        const store = loadConversations();
-        const existing = store.conversations[overlay.id];
-        // Only update if the overlay has newer/more messages
-        if (existing && existing.messages.length >= overlay.messages.length) return;
-        store.conversations[overlay.id] = {
-          id: overlay.id,
-          title: overlay.title || 'Overlay chat',
-          createdAt: overlay.createdAt || Date.now(),
-          updatedAt: overlay.updatedAt || Date.now(),
-          model: overlay.model || 'default',
-          messages: overlay.messages,
-        };
-        saveConversations(store);
-        set({
-          conversations: Object.values(store.conversations).sort(
-            (a, b) => b.updatedAt - a.updatedAt,
-          ),
-        });
-      } catch {
-        // Overlay command unavailable (non-Tauri or no overlay data)
-      }
     },
 
     createConversation: (model?: string) => {

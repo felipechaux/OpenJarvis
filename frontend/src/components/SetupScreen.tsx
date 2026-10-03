@@ -129,9 +129,20 @@ function EngineChoice({
   );
 }
 
-export function SetupScreen({ onReady }: { onReady: () => void }) {
+/// `onAttention` fires when the user has to act (pick an engine) or see an
+/// error; a normal launch only waits for the backend and needs no window.
+export function SetupScreen({
+  onReady,
+  onAttention,
+}: {
+  onReady: () => void;
+  onAttention?: () => void;
+}) {
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const choosing = status?.phase === 'choose_engine' && !!status.cli_options?.length;
+  useEffect(() => {
+    if (choosing || status?.error) onAttention?.();
+  }, [choosing, status?.error, onAttention]);
   const poll = useCallback(async () => {
     const s = await getSetupStatus();
     if (s) setStatus(s);

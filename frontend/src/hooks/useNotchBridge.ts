@@ -1,4 +1,5 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import { useLocation, useNavigate } from 'react-router';
 import { isTauri } from '../lib/api';
 import { useAppStore } from '../lib/store';
 import { presenceOf } from './usePresence';
@@ -22,6 +23,9 @@ type EmitTo = (target: string, event: string, payload: unknown) => Promise<void>
 /// Window event carrying a notch command to the chat input (InputArea), which
 /// owns the voice and the stream: `CustomEvent<NotchCommand>`.
 export const NOTCH_ACTION_EVENT = 'jarvis-notch-action';
+
+// After switching to the chat, give InputArea a moment to mount.
+const MOUNT_MS = 150;
 
 /// Runs a command from the notch pill in this (main) window.
 function runCommand(cmd: NotchCommand) {
@@ -77,7 +81,22 @@ function levelOf(s: AppState): NotchLevel {
 /// listen, send) come back as `notch:command`.  Mount once, in the main window
 /// only.
 export function useNotchBridge() {
+  // InputArea (the chat) runs the commands; on another page, go to it first.
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const route = useRef({ navigate, pathname });
+  route.current = { navigate, pathname };
+
   useEffect(() => {
+    const onCommand = (cmd: NotchCommand) => {
+      if (route.current.pathname === '/') {
+        runCommand(cmd);
+        return;
+      }
+      route.current.navigate('/');
+      setTimeout(() => runCommand(cmd), MOUNT_MS);
+    };
+
     if (!isTauri()) return;
     let prev = '';
     let emitTo: EmitTo | null = null;
@@ -112,7 +131,7 @@ export function useNotchBridge() {
       emitTo = mod.emitTo;
       push(useAppStore.getState());
       unsubscribe = useAppStore.subscribe(push);
-      const off = await mod.listen<NotchCommand>(NOTCH_COMMAND_EVENT, (e) => runCommand(e.payload));
+      const off = await mod.listen<NotchCommand>(NOTCH_COMMAND_EVENT, (e) => onCommand(e.payload));
       if (disposed) off();
       else unlisten = off;
     });

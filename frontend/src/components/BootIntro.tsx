@@ -62,14 +62,17 @@ async function signalDock() {
 /// The launch intro: an arc reactor powering up in the dark, a greeting,
 /// then the reactor docking into the notch.  Timed to the synthesized score
 /// in lib/bootSound.ts (same BOOT_TIMELINE).  Click or Esc skips it.
+/// `onDock` fires as the reactor reaches the notch: the window can go then.
 export function BootIntro({
   lang,
   sound,
   onDone,
+  onDock,
 }: {
   lang: Lang;
   sound: boolean;
   onDone: () => void;
+  onDock?: () => void;
 }) {
   const [leaving, setLeaving] = useState(false);
   const [dock, setDock] = useState<[number, number] | null>(null);
@@ -81,6 +84,8 @@ export function BootIntro({
     [],
   );
   const text = useMemo(() => greeting(lang), [lang]);
+  const onDockRef = useRef(onDock);
+  onDockRef.current = onDock;
 
   useEffect(() => {
     const finish = () => {
@@ -115,7 +120,10 @@ export function BootIntro({
     const aim = setTimeout(() => {
       if (reactor.current) notchVector(reactor.current).then(setDock);
     }, (T.dock - 0.5) * 1000);
-    const arrive = setTimeout(signalDock, (reduced ? 0.8 : T.dock + ARRIVAL_S) * 1000);
+    const arrive = setTimeout(() => {
+      signalDock();
+      onDockRef.current?.();
+    }, (reduced ? 0.8 : T.dock + ARRIVAL_S) * 1000);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') skip();
     };

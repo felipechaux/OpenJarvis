@@ -1,6 +1,6 @@
 /* Notch pill — see NotchPage.tsx.  The window is transparent and
    click-through; only the black pill is visible, and it disappears into the
-   hardware notch when idle.  The reactor is companion mode's ArcReactor
+   hardware notch when idle.  The reactor is the chat's ArcReactor
    (styles in index.css), scaled down. */
 
 :root {
@@ -732,4 +732,11 @@ html.notch-window #root {
   .notch__head .arc-reactor {
     translate: none;
   }
+}
+
+/* ── Open the full JARVIS window from the panel header ── */
+.notch__expand {
+  margin-left: auto;
+  align-self: flex-start;
+  margin-top: 14px;
 }

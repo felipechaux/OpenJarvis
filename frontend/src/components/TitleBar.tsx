@@ -1,7 +1,5 @@
 import { useEffect, useState } from 'react';
-import { PictureInPicture2 } from 'lucide-react';
 import { isTauri } from '../lib/api';
-import { useCompanionMode } from '../hooks/useCompanionMode';
 
 const IS_MAC = navigator.userAgent.includes('Mac');
 
@@ -10,7 +8,6 @@ const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', '
 
 export function TitleBar() {
   const [time, setTime] = useState(() => new Date());
-  const { toggle: toggleCompanion } = useCompanionMode();
 
   useEffect(() => {
     const t = setInterval(() => setTime(new Date()), 1000);
@@ -111,16 +108,6 @@ export function TitleBar() {
           justifyContent: 'flex-end',
         }}
       >
-        {isTauri() && (
-          <button
-            onClick={toggleCompanion}
-            className="p-1 rounded-md cursor-pointer"
-            style={{ pointerEvents: 'auto', color: 'var(--color-text-tertiary)', background: 'transparent', border: 'none' }}
-            title={`Companion mode (${IS_MAC ? '⌘⇧J' : 'Ctrl+Shift+J'})`}
-          >
-            <PictureInPicture2 size={13} />
-          </button>
-        )}
         <span style={{ color: 'var(--color-text-tertiary)', opacity: 0.7 }}>{dateStr}</span>
         <span className="hud-mono" style={{ color: 'var(--color-text-secondary)' }}>
           {hh}:{mm}:<span style={{ color: 'var(--color-accent)' }}>{ss}</span>

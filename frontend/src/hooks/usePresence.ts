@@ -1,7 +1,7 @@
 import { useAppStore } from '../lib/store';
 
 /// What JARVIS is doing right now, derived from mic, stream and TTS state.
-/// Drives every "alive" visual (reactor, companion status line).
+/// Drives every "alive" visual (reactor, notch pill).
 export type Presence = 'idle' | 'listening' | 'thinking' | 'speaking';
 
 type AppState = ReturnType<typeof useAppStore.getState>;

@@ -336,54 +336,7 @@ button {
   animation-play-state: running;
 }
 
-/* ─── COMPANION MODE ─────────────────────────────────────────────────────── */
-.companion-status {
-  margin-top: 10px;
-  font-family: var(--font-hud);
-  font-size: 0.62rem;
-  letter-spacing: 0.3em;
-  color: var(--color-text-tertiary);
-  transition: color 0.4s ease, text-shadow 0.4s ease;
-}
-.companion-status-listening,
-.companion-status-speaking {
-  color: var(--color-accent);
-  text-shadow: 0 0 12px var(--color-accent-glow);
-}
-@keyframes companion-status-blink {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.45; }
-}
-.companion-status-thinking {
-  color: var(--color-text-secondary);
-  animation: companion-status-blink 1.2s ease-in-out infinite;
-}
-.companion-exchange {
-  font-size: 0.8rem;
-  line-height: 1.55;
-  -webkit-mask: linear-gradient(to bottom, transparent, #000 14px, #000 calc(100% - 14px), transparent);
-  mask: linear-gradient(to bottom, transparent, #000 14px, #000 calc(100% - 14px), transparent);
-}
-.companion-user {
-  padding-top: 10px;
-  color: var(--color-text-tertiary);
-  text-align: right;
-  white-space: pre-wrap;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.companion-reply {
-  margin-top: 8px;
-  padding-bottom: 10px;
-  color: var(--color-text);
-  white-space: pre-wrap;
-  animation: jarvis-msg-in 0.35s ease-out both;
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .companion-status-thinking,
   .presence-reactor,
   .arc-spin,
   .arc-boost,

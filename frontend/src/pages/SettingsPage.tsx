@@ -150,6 +150,66 @@ const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: 'system', label: 'System', icon: Monitor },
 ];
 
+function Switch({ on, onToggle, disabled }: { on: boolean; onToggle: () => void; disabled?: boolean }) {
+  return (
+    <button
+      onClick={onToggle}
+      disabled={disabled}
+      className="relative w-11 h-6 rounded-full transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-default"
+      style={{ background: on ? 'var(--color-accent)' : 'var(--color-bg-tertiary)' }}
+    >
+      <span
+        className="absolute top-0.5 left-0.5 w-5 h-5 rounded-full transition-transform bg-white"
+        style={{
+          transform: on ? 'translateX(20px)' : 'translateX(0)',
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+        }}
+      />
+    </button>
+  );
+}
+
+/// Launch at login (tauri-plugin-autostart: a LaunchAgent for this app's
+/// executable).  A dev build would register target/debug, which needs vite
+/// running, so it is only offered in the installed app.
+function LaunchAtLoginRow() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [error, setError] = useState('');
+  const dev = import.meta.env.DEV;
+
+  useEffect(() => {
+    import('@tauri-apps/plugin-autostart')
+      .then(({ isEnabled }) => isEnabled())
+      .then(setEnabled)
+      .catch(() => setEnabled(false));
+  }, []);
+
+  const toggle = async () => {
+    setError('');
+    try {
+      const api = await import('@tauri-apps/plugin-autostart');
+      if (enabled) await api.disable();
+      else await api.enable();
+      setEnabled(await api.isEnabled());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  return (
+    <SettingRow
+      label="Iniciar con el Mac / Launch at login"
+      description={
+        dev
+          ? 'Disponible en la app instalada (en desarrollo apuntaría al binario de debug, que necesita vite).'
+          : error || 'JARVIS arranca en el notch al encender o iniciar sesión en tu Mac.'
+      }
+    >
+      <Switch on={!!enabled} onToggle={toggle} disabled={dev || enabled === null} />
+    </SettingRow>
+  );
+}
+
 export function SettingsPage() {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
@@ -649,6 +709,16 @@ export function SettingsPage() {
                 />
               </button>
             </SettingRow>
+            <SettingRow
+              label="Abrir la ventana al iniciar / Open window on launch"
+              description="Apagado: JARVIS arranca solo en el notch; esta ventana se abre con ⌘⇧J, el botón ⤢ del notch o el menú de la barra"
+            >
+              <Switch
+                on={settings.openWindowOnLaunch}
+                onToggle={() => { updateSettings({ openWindowOnLaunch: !settings.openWindowOnLaunch }); showSaved(); }}
+              />
+            </SettingRow>
+            <LaunchAtLoginRow />
             <SettingRow label="Backend status" description="Requires Whisper, Deepgram, or another speech backend">
               <div className="flex items-center gap-2">
                 <span
