@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "vite",
     "dev:tauri": "bash src-tauri/scripts/dev.sh",
+    "install:mac": "bash src-tauri/scripts/install-mac.sh",
     "build": "tsc -b && vite build",
     "build:tauri": "tsc -b && vite build --outDir dist",
     "preview": "vite preview",

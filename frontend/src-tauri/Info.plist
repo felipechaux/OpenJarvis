@@ -6,5 +6,9 @@
     <string>OpenJarvis listens for the "Jarvis" wake word and transcribes voice commands locally.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>OpenJarvis uses on-device speech recognition to detect the "Jarvis" wake word.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>OpenJarvis controls apps like Spotify and Chrome when you ask it to.</string>
+    <key>NSContactsUsageDescription</key>
+    <string>OpenJarvis looks up contact names for your messages.</string>
 </dict>
 </plist>
