@@ -258,8 +258,8 @@ fn resolve_bin(name: &str) -> String {
 }
 
 /// Find the OpenJarvis project root (contains pyproject.toml).
-/// Checks OPENJARVIS_ROOT env var, walks up from the executable, then
-/// probes common clone locations.
+/// Checks OPENJARVIS_ROOT, then ~/.openjarvis/project-root, walks up from
+/// the executable, then probes common clone locations.
 fn find_project_root() -> Option<std::path::PathBuf> {
     // 1. Explicit env var override
     if let Ok(root) = std::env::var("OPENJARVIS_ROOT") {
@@ -269,7 +269,17 @@ fn find_project_root() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 2. Walk up from the running executable (works in dev and .app bundle)
+    // 2. ~/.openjarvis/project-root: the installed app, launched from Finder
+    //    or at login, gets no OPENJARVIS_ROOT; this file names the clone.
+    let pointer = std::path::PathBuf::from(home_dir()).join(".openjarvis/project-root");
+    if let Ok(text) = std::fs::read_to_string(&pointer) {
+        let path = std::path::PathBuf::from(text.trim());
+        if path.join("pyproject.toml").exists() {
+            return Some(path);
+        }
+    }
+
+    // 3. Walk up from the running executable (works in dev and .app bundle)
     if let Ok(exe) = std::env::current_exe() {
         let mut dir = exe.parent().map(|p| p.to_path_buf());
         for _ in 0..8 {
@@ -282,7 +292,7 @@ fn find_project_root() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 3. Fallback: well-known direct paths
+    // 4. Fallback: well-known direct paths
     let home = home_dir();
     let direct = [
         format!("{home}/OpenJarvis"),
@@ -305,7 +315,7 @@ fn find_project_root() -> Option<std::path::PathBuf> {
         }
     }
 
-    // 4. Shallow scan: look for OpenJarvis one level inside common parent dirs.
+    // 5. Shallow scan: look for OpenJarvis one level inside common parent dirs.
     //    This catches clones like ~/Documents/my-stuff/OpenJarvis without
     //    needing to enumerate every possible intermediate folder.
     let scan_parents = [

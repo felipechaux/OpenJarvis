@@ -26,6 +26,8 @@ SRC_TAURI="$FRONTEND/src-tauri"
 BIN="$SRC_TAURI/target/debug/openjarvis-desktop"
 IDENTIFIER="com.openjarvis.desktop"
 export OPENJARVIS_ROOT="$REPO_ROOT"
+# The installed app (Finder, login) has no env var: point it at this clone.
+mkdir -p "$HOME/.openjarvis" && printf '%s\n' "$REPO_ROOT" > "$HOME/.openjarvis/project-root"
 
 cleanup() {
     echo
