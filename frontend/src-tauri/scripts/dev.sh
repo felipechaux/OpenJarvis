@@ -25,6 +25,7 @@ FRONTEND="$REPO_ROOT/frontend"
 SRC_TAURI="$FRONTEND/src-tauri"
 BIN="$SRC_TAURI/target/debug/openjarvis-desktop"
 IDENTIFIER="com.openjarvis.desktop"
+export OPENJARVIS_ROOT="$REPO_ROOT"
 
 cleanup() {
     echo
@@ -32,10 +33,18 @@ cleanup() {
     [[ -n "${VITE_PID:-}" ]] && kill "$VITE_PID" 2>/dev/null || true
     [[ -n "${BIN_PID:-}" ]] && kill "$BIN_PID" 2>/dev/null || true
     pkill -f "JarvisWake" 2>/dev/null || true
-    lsof -ti:5173 2>/dev/null | xargs -r kill -9 2>/dev/null || true
+    pkill -f "openjarvis-desktop" 2>/dev/null || true
+    lsof -ti:5173 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
     exit 0
 }
 trap cleanup INT TERM EXIT
+
+echo "[dev] cleaning up any previous instances..."
+pkill -f "JarvisWake" 2>/dev/null || true
+pkill -f "openjarvis-desktop" 2>/dev/null || true
+lsof -ti:5173 2>/dev/null | xargs kill -9 2>/dev/null || true
+lsof -ti:8000 2>/dev/null | xargs kill -9 2>/dev/null || true
 
 echo "[dev] starting vite..."
 cd "$FRONTEND"
