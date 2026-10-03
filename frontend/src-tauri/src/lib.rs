@@ -1100,6 +1100,10 @@ fn wake_ready() -> bool {
     WAKE_READY.load(Ordering::SeqCst)
 }
 
+/// Mirrors ``USE_NATIVE_WAKE`` in ``frontend/src/hooks/useWakeWord.ts``.
+#[cfg(target_os = "macos")]
+const USE_NATIVE_WAKE: bool = false;
+
 /// Path to the bundled JarvisWake Swift sidecar executable.
 ///
 /// The sidecar lives inside ``JarvisWake.app/Contents/MacOS/JarvisWake``
@@ -1162,6 +1166,13 @@ fn wake_binary_path() -> Option<std::path::PathBuf> {
 async fn spawn_wake_listener(app: tauri::AppHandle, backend: SharedBackend) {
     use tauri::Emitter;
     use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    // The sidecar never detects the wake word; the webview uses Whisper
+    // polling instead (``USE_NATIVE_WAKE`` in useWakeWord.ts).  Keep the
+    // two flags in sync, otherwise an unused sidecar holds the mic open.
+    if !USE_NATIVE_WAKE {
+        return;
+    }
 
     // Idempotency guard: the setup hook spawns this once on launch, and the
     // ``start_backend`` command can also spawn it.  Don't double up.
@@ -1991,6 +2002,8 @@ const NOTCH_MAIN_EVENT: &str = "notch:main-window";
 fn show_main(app: &tauri::AppHandle, page: Option<&str>) {
     use tauri::Emitter;
     if let Some(win) = app.get_webview_window("main") {
+        #[cfg(target_os = "macos")]
+        park_main(&win, false);
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
@@ -2004,17 +2017,81 @@ fn hide_main(app: &tauri::AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = app.emit_to("main", WINDOW_EVENT, "hidden");
         let _ = app.emit_to("notch", NOTCH_MAIN_EVENT, false);
+        #[cfg(target_os = "macos")]
+        park_main(&win, true);
+        #[cfg(not(target_os = "macos"))]
         let _ = win.hide();
     }
+}
+
+/// True while the main window is parked (see `park_main`).
+#[cfg(target_os = "macos")]
+static MAIN_PARKED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the user can see the main window.
+fn main_open(win: &tauri::WebviewWindow) -> bool {
+    #[cfg(target_os = "macos")]
+    if MAIN_PARKED.load(Ordering::SeqCst) {
+        return false;
+    }
+    win.is_visible().unwrap_or(false)
+}
+
+/// "Hides" the main window without ordering it out.  WebKit holds back
+/// `getUserMedia` (and its permission prompt) while the page isn't visible,
+/// and the main page runs the wake word and the voice for the notch, so a
+/// truly hidden window means JARVIS can't hear.  Parked, the window stays
+/// ordered in at the back, fully transparent, click-through and out of
+/// Cmd+` / Mission Control, with WebKit's occlusion detection off so being
+/// covered doesn't count as hidden either.
+#[cfg(target_os = "macos")]
+fn park_main(win: &tauri::WebviewWindow, parked: bool) {
+    use objc::runtime::Object;
+    use objc::{msg_send, sel, sel_impl};
+    // NSWindowCollectionBehaviorTransient | NSWindowCollectionBehaviorIgnoresCycle
+    const PARKED_BEHAVIOR: usize = (1 << 3) | (1 << 6);
+    static NORMAL_BEHAVIOR: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+    if MAIN_PARKED.swap(parked, Ordering::SeqCst) == parked {
+        return;
+    }
+    let _ = win.with_webview(move |wv| unsafe {
+        let view = wv.inner() as *mut Object;
+        let window = wv.ns_window() as *mut Object;
+        let private: bool =
+            msg_send![view, respondsToSelector: sel!(_setWindowOcclusionDetectionEnabled:)];
+        if private {
+            let _: () = msg_send![view, _setWindowOcclusionDetectionEnabled: !parked];
+        }
+        if parked {
+            let current: usize = msg_send![window, collectionBehavior];
+            if current != PARKED_BEHAVIOR {
+                NORMAL_BEHAVIOR.store(current, Ordering::SeqCst);
+            }
+            let _: () = msg_send![window, setCollectionBehavior: PARKED_BEHAVIOR];
+            let _: () = msg_send![window, setAlphaValue: 0.0f64];
+            let _: () = msg_send![window, setIgnoresMouseEvents: true];
+            let nil: *mut Object = std::ptr::null_mut();
+            let _: () = msg_send![window, orderBack: nil];
+        } else {
+            let normal = NORMAL_BEHAVIOR.load(Ordering::SeqCst);
+            if normal != usize::MAX {
+                let _: () = msg_send![window, setCollectionBehavior: normal];
+            }
+            let _: () = msg_send![window, setIgnoresMouseEvents: false];
+            let _: () = msg_send![window, setAlphaValue: 1.0f64];
+        }
+    });
 }
 
 /// Shows (true), hides (false) or toggles (null) the main window.  Toggling
 /// a window that is open but behind other apps brings it forward.
 #[tauri::command]
 fn main_window(app: tauri::AppHandle, visible: Option<bool>) {
-    let shown = app.get_webview_window("main").is_some_and(|w| {
-        w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false)
-    });
+    let shown = app
+        .get_webview_window("main")
+        .is_some_and(|w| main_open(&w) && w.is_focused().unwrap_or(false));
     if visible.unwrap_or(!shown) {
         show_main(&app, None);
     } else {
@@ -2104,6 +2181,14 @@ pub fn run() {
             if let Err(e) = notch::create(app) {
                 eprintln!("[notch] could not create the notch window: {e}");
             }
+            // The main window starts hidden (tauri.conf.json); park it so its
+            // page can still use the mic.  The intro / setup unpark it.
+            #[cfg(target_os = "macos")]
+            if let Some(win) = app.get_webview_window("main") {
+                if !win.is_visible().unwrap_or(false) {
+                    park_main(&win, true);
+                }
+            }
 
             // Cmd+Shift+J opens / hides the main window from anywhere.
             {
@@ -2178,7 +2263,7 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { has_visible_windows, .. } = event {
                 let main_visible = app
                     .get_webview_window("main")
-                    .is_some_and(|w| w.is_visible().unwrap_or(false));
+                    .is_some_and(|w| main_open(&w));
                 if !main_visible {
                     show_main(app, None);
                 }
