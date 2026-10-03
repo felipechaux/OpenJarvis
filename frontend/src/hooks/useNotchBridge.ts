@@ -2,19 +2,39 @@ import { useEffect } from 'react';
 import { isTauri } from '../lib/api';
 import { useAppStore } from '../lib/store';
 import { presenceOf } from './usePresence';
+import { INTERRUPT_EVENT, WAKE_EVENT } from './useWakeWord';
 import {
+  NOTCH_COMMAND_EVENT,
   NOTCH_EVENT,
   NOTCH_LABEL,
   NOTCH_LEVEL_EVENT,
   replyPreview,
   snippet,
   toolLabel,
+  type NotchCommand,
   type NotchLevel,
   type NotchState,
 } from '../notch/state';
 
 type AppState = ReturnType<typeof useAppStore.getState>;
 type EmitTo = (target: string, event: string, payload: unknown) => Promise<void>;
+
+/// Window event carrying a notch command to the chat input (InputArea), which
+/// owns the voice and the stream: `CustomEvent<NotchCommand>`.
+export const NOTCH_ACTION_EVENT = 'jarvis-notch-action';
+
+/// Runs a command from the notch pill in this (main) window.
+function runCommand(cmd: NotchCommand) {
+  if (cmd.type === 'listen') {
+    window.dispatchEvent(new CustomEvent(WAKE_EVENT, { detail: 'notch' }));
+    return;
+  }
+  if (cmd.type === 'stop') {
+    // Also cuts the morning briefing, which ChatPage streams on its own.
+    window.dispatchEvent(new CustomEvent(INTERRUPT_EVENT));
+  }
+  window.dispatchEvent(new CustomEvent<NotchCommand>(NOTCH_ACTION_EVENT, { detail: cmd }));
+}
 
 // Level updates to the notch: the reactor smooths between them, so ~12/s is
 // enough and keeps cross-window IPC cheap.
@@ -53,7 +73,9 @@ function levelOf(s: AppState): NotchLevel {
 
 /// Mirrors JARVIS's presence into the notch window (see src-tauri notch mod):
 /// state on every change, plus the voice level while listening or speaking so
-/// the notch reactor moves with the audio.  Mount once, in the main window only.
+/// the notch reactor moves with the audio.  Commands from the pill (stop,
+/// listen, send) come back as `notch:command`.  Mount once, in the main window
+/// only.
 export function useNotchBridge() {
   useEffect(() => {
     if (!isTauri()) return;
@@ -84,13 +106,20 @@ export function useNotchBridge() {
     };
 
     let unsubscribe = () => {};
-    import('@tauri-apps/api/event').then((mod) => {
+    let unlisten = () => {};
+    let disposed = false;
+    import('@tauri-apps/api/event').then(async (mod) => {
       emitTo = mod.emitTo;
       push(useAppStore.getState());
       unsubscribe = useAppStore.subscribe(push);
+      const off = await mod.listen<NotchCommand>(NOTCH_COMMAND_EVENT, (e) => runCommand(e.payload));
+      if (disposed) off();
+      else unlisten = off;
     });
     return () => {
+      disposed = true;
       unsubscribe();
+      unlisten();
       if (levelTimer) clearInterval(levelTimer);
     };
   }, []);

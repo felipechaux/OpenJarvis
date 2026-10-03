@@ -23,11 +23,31 @@ export interface NotchLevel {
 }
 
 export const NOTCH_LABEL = 'notch';
+export const MAIN_LABEL = 'main';
+/// The pill asking the main window to act (Tauri event, notch → main).
+export const NOTCH_COMMAND_EVENT = 'notch:command';
+/// The cursor entering (true) or leaving (false) the pill, from src-tauri.
+export const NOTCH_HOVER_EVENT = 'notch:hover';
+
+export type NotchCommand =
+  /// Cut JARVIS off: stop speaking and drop the reply in flight.
+  | { type: 'stop' }
+  /// Open the mic, as if the wake word was heard.
+  | { type: 'listen' }
+  /// Send a message as if typed in the chat.
+  | { type: 'send'; text: string };
+
+/// The message a dropped file becomes; the backend's look_at_file fast path
+/// matches it verbatim (agents/fast_paths.py), so keep the two in step.
+export function fileMessage(path: string): string {
+  return `Revisa este archivo: ${path}`;
+}
 /// The launch intro's reactor reaching the notch: the pill "catches" it.
 export const NOTCH_DOCK_EVENT = 'notch:dock';
 
 const TOOL_LABELS: Record<string, string> = {
   look_at_screen: 'Mirando tu pantalla',
+  look_at_file: 'Revisando el archivo',
   browser_task: 'Navegando en la web',
   chrome_tabs: 'Revisando pestañas',
   start_coding_session: 'Abriendo sesión de código',

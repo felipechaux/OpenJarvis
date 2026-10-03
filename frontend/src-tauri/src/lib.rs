@@ -1721,7 +1721,9 @@ async fn speech_health(api_url: String) -> Result<serde_json::Value, String> {
 // of the primary display (the MacBook notch).  It renders /notch, which draws
 // a Dynamic-Island-style pill that grows out of the notch while JARVIS
 // listens, thinks or speaks.  The main window drives it with `notch:state`
-// events; this window never takes focus or clicks.
+// events; the pill sends `notch:command` back (stop, listen, send text, a
+// dropped file).  Only the drawn pill takes clicks; it takes keyboard focus
+// only while its text box is in use.
 // ---------------------------------------------------------------------------
 
 #[cfg(target_os = "macos")]
@@ -1729,12 +1731,15 @@ mod notch {
     use objc::{msg_send, sel, sel_impl};
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::time::{Duration, Instant};
-    use tauri::{LogicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+    use tauri::{Emitter, LogicalPosition, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
     pub const LABEL: &str = "notch";
+    /// Cursor entered (true) or left (false) the pill.  Sent from here because
+    /// the unfocused webview gets no reliable mouseenter/mouseleave.
+    const HOVER_EVENT: &str = "notch:hover";
     /// Room for the expanded pill; the page draws inside it.
     const WIDTH: f64 = 560.0;
-    const HEIGHT: f64 = 380.0;
+    const HEIGHT: f64 = 480.0;
     /// Above the menu bar (NSMainMenuWindowLevel = 24, status items = 25).
     const LEVEL: i64 = 27;
     /// canJoinAllSpaces | stationary | ignoresCycle | fullScreenAuxiliary
@@ -1847,7 +1852,8 @@ mod notch {
             .visible_on_all_workspaces(true)
             .skip_taskbar(true)
             .focused(false)
-            .accept_first_mouse(false)
+            // The pill's buttons and input work on the first click.
+            .accept_first_mouse(true)
             .build()?;
         win.set_ignore_cursor_events(true)?;
         place(&win, at);
@@ -1886,6 +1892,7 @@ mod notch {
                 if over != clickable {
                     clickable = over;
                     let _ = win.set_ignore_cursor_events(!over);
+                    let _ = win.emit_to(LABEL, HOVER_EVENT, over);
                 }
             }
         });
@@ -1900,6 +1907,24 @@ fn notch_hit_area(width: f64, height: f64) {
     notch::set_hit_area(width, height);
     #[cfg(not(target_os = "macos"))]
     let _ = (width, height);
+}
+
+/// The notch's text box takes the keyboard (true) or hands it back to the app
+/// the user was in (false), so typing to JARVIS never strands the focus.
+#[tauri::command]
+fn notch_keyboard(app: tauri::AppHandle, focus: bool) {
+    if focus {
+        if let Some(win) = app.get_webview_window("notch") {
+            let _ = win.set_focus();
+        }
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.run_on_main_thread(|| unsafe {
+        use objc::{class, msg_send, sel, sel_impl};
+        let ns_app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![ns_app, deactivate];
+    });
 }
 
 /// The user's own launch-intro sound, `~/.openjarvis/boot-sound.mp3`, as raw
@@ -2439,6 +2464,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             notch_hit_area,
+            notch_keyboard,
             notch_anchor,
             boot_sound,
             get_setup_status,

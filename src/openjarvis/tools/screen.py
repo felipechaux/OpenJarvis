@@ -99,9 +99,12 @@ def _engine_for(model: str):
     return AntigravityCLIEngine()
 
 
-def describe(image: Path, question: str) -> tuple[str, str]:
-    """``(answer, model)`` from the first vision model that works."""
-    prompt = PROMPT.format(question=question)
+def describe(image: Path, question: str, template: str = PROMPT) -> tuple[str, str]:
+    """``(answer, model)`` from the first vision model that works.
+
+    *template* is the vision prompt, with a ``{question}`` placeholder.
+    """
+    prompt = template.format(question=question)
     errors = []
     for model in _vision_models():
         try:

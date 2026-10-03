@@ -152,6 +152,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.look_at_file  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.browser_task  # noqa: F401
 except ImportError:
     pass

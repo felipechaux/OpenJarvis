@@ -25,6 +25,7 @@ the events endpoint the app polls; it rate-limits itself.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import time
@@ -270,6 +271,86 @@ def read_new_actions(st: Dict[str, Any], path: Path) -> List[Tuple[str, str]]:
     return actions
 
 
+# ── Prompts waiting on the user (permission dialogs, numbered questions) ──
+
+_BOX_CHARS = "│╭╮╰╯─┃┏┓┗┛━ \t"
+_OPTION_RE = re.compile(r"^(?:[❯›>]\s*)?(\d)[.)]\s+(.+?)\s*$")
+_RULE_RE = re.compile(r"^[─━\-=_ ]{3,}$")
+
+
+def _short_label(label: str) -> str:
+    """Button text for an option: Claude's long permission choices shortened."""
+    low = label.lower()
+    if low.startswith("yes, and don't ask again") or low.startswith("yes, allow all"):
+        return "Sí, siempre"
+    if low.startswith("yes, allow") and "always" in low:
+        return "Sí, siempre"
+    if low in ("yes", "allow", "allow once"):
+        return "Sí"
+    if low.startswith("no"):
+        return "No"
+    label = re.sub(r"\s*\(esc\)$", "", label)
+    return label if len(label) <= 28 else label[:27].rstrip() + "…"
+
+
+def parse_prompt(screen: str) -> Optional[Dict[str, Any]]:
+    """The numbered menu the assistant is waiting on, or None.
+
+    Claude Code and Antigravity ask for permission (and AskUserQuestion asks
+    its questions) with a numbered menu where the digit selects directly.
+    Returns ``{"id", "question", "detail", "options": [{"key", "label",
+    "title"}]}``; ``id`` fingerprints the dialog so an answer is only typed
+    while that same dialog is still on screen.  A "No…" option answers with
+    Escape, the CLI's reliable way to decline.
+    """
+    rows = [r.strip(_BOX_CHARS) for r in screen.splitlines()]
+    rows = [r for r in rows if r and not _RULE_RE.match(r)]
+    # The last run of consecutive numbered options (1., 2., …) on screen.
+    end = None
+    for i in range(len(rows) - 1, -1, -1):
+        if _OPTION_RE.match(rows[i]):
+            end = i
+            break
+    if end is None:
+        return None
+    start = end
+    while start > 0 and _OPTION_RE.match(rows[start - 1]):
+        start -= 1
+    found = [_OPTION_RE.match(r) for r in rows[start : end + 1]]
+    numbers = [int(m.group(1)) for m in found if m]
+    if len(numbers) < 2 or numbers != list(range(1, len(numbers) + 1)):
+        return None
+    q = start - 1
+    while q >= 0 and not rows[q].endswith("?"):
+        q -= 1
+    if q < 0 or start - q > 3:
+        return None  # a numbered list in the output, not a question
+    question = rows[q]
+    detail = [r for r in rows[max(0, q - 4) : q] if not r.endswith("?")][-3:]
+    options = []
+    for m in found:
+        if not m:
+            continue
+        label = m.group(2)
+        decline = label.lower().startswith("no")
+        options.append(
+            {
+                "key": "Escape" if decline else m.group(1),
+                "label": _short_label(label),
+                "title": label,
+            }
+        )
+    digest = hashlib.sha1(
+        "\n".join([question, *detail, *[o["title"] for o in options]]).encode()
+    ).hexdigest()[:12]
+    return {
+        "id": digest,
+        "question": question,
+        "detail": "\n".join(detail),
+        "options": options,
+    }
+
+
 def _is_working(st: Dict[str, Any], screen: str, now: float, cli: str) -> bool:
     if cli == "antigravity":
         return now - st.get("last_activity", 0.0) < _AGY_IDLE_S
@@ -306,7 +387,14 @@ def step(
     st = _state.setdefault(name, {})
     if actions:
         st["last_activity"] = now
-    if not _is_working(st, screen, now, cli):
+    working = _is_working(st, screen, now, cli)
+    if working and not st.get("working_since"):
+        st["edited"] = []  # files edited in this stretch of work (notch)
+    st.setdefault("edited", [])
+    for cat, detail in actions:
+        if cat == "edit" and detail and detail not in st["edited"]:
+            st["edited"].append(detail)
+    if not working:
         st.update(working_since=None, actions=[], last_emit=0.0)
         return None
     if not st.get("working_since"):
@@ -332,6 +420,45 @@ def step(
     st["actions"] = []
     st["last_emit"] = now
     return _progress_event(name, project, text, cli=cli)
+
+
+def live(now: Optional[float] = None) -> List[Dict[str, Any]]:
+    """What each live JARVIS session is doing right now, for the notch.
+
+    ``status`` is "prompt" (a menu waits on the user; see ``prompt``),
+    "working" or "idle".  ``edited`` lists the files edited since the
+    session last started working (as seen by ``scan``).
+    """
+    from openjarvis.tools import session_control as sc
+
+    now = now or time.time()
+    out = []
+    for name, launch_dir in sc.list_sessions():
+        cli = sc.session_cli(name)
+        screen = sc.capture_screen(name, lines=40)
+        st = _state.get(name, {})
+        prompt = parse_prompt(screen)
+        if prompt:
+            status = "prompt"
+        elif _is_working(st, screen, now, cli):
+            status = "working"
+        else:
+            status = "idle"
+        elapsed = _elapsed_from_screen(screen) if status == "working" else None
+        if status == "working" and elapsed is None and st.get("working_since"):
+            elapsed = int(now - st["working_since"])
+        out.append(
+            {
+                "name": name,
+                "project": sc.project_label(Path(launch_dir)) if launch_dir else name,
+                "cli": cli,
+                "status": status,
+                "elapsed_s": elapsed,
+                "edited": list(st.get("edited", [])),
+                "prompt": prompt,
+            }
+        )
+    return out
 
 
 def scan(now: Optional[float] = None, interval: float = 60.0) -> List[Dict[str, Any]]:

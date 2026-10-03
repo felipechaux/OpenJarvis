@@ -310,6 +310,27 @@ def _match_look_at_screen(text: str) -> Optional[FastPath]:
     return None
 
 
+# ── look_at_file ───────────────────────────────────────────────────────────
+# The notch sends "Revisa este archivo: <path>" for a dropped file.  Matched on
+# the raw text: paths are long and may end in punctuation _normalize strips.
+
+_LOOK_AT_FILE_RE = re.compile(r"^Revisa este archivo: (?P<path>/[^\n]+)$")
+
+
+def _file_reply(result: ToolResult) -> Optional[str]:
+    # Text excerpts need the model to answer; vision answers are ready to speak.
+    if result.success and (result.metadata or {}).get("kind") == "vision":
+        return result.content or None
+    return None
+
+
+def _match_look_at_file(text: str) -> Optional[FastPath]:
+    m = _LOOK_AT_FILE_RE.match(text.strip())
+    if m:
+        return FastPath("look_at_file", {"path": m["path"].strip()}, _file_reply)
+    return None
+
+
 _MATCHERS = (
     _match_look_at_screen,
     _match_model_switch,
@@ -343,6 +364,9 @@ def briefing_prefetch(text: str, tool_names: set[str]) -> list[tuple[str, Dict[s
 
 def match_fast_path(text: str, tool_names: set[str]) -> Optional[FastPath]:
     """The fast path for *text*, or ``None`` when the model should handle it."""
+    dropped = _match_look_at_file(text)
+    if dropped is not None:
+        return dropped if dropped.tool in tool_names else None
     normalized = _normalize(text)
     if not normalized or len(normalized) > 80 or "\n" in normalized:
         return None

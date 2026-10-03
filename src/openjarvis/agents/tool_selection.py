@@ -71,6 +71,9 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"pesta[nñ]a|tab\b|tabs\b|chrome|navegador|browser|abierto|cierra"
             r"|close|ve a|switch"
         ),
+        "look_at_file": (
+            r"archivo|file|documento|pdf|imagen|foto|captura|/Users/|~/"
+        ),
         "look_at_screen": (
             r"pantalla|screen|\bves\b|\bmira\b|\besto\b|\besta\b|aqu[ií]"
             r"|abierto|ventana|window|error|see\b|look"

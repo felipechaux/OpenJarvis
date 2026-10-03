@@ -81,6 +81,7 @@ export function useEarcons() {
 // Tools with their own chime when they start.
 const TOOL_EARCONS: Record<string, Earcon> = {
   look_at_screen: 'shutter',
+  look_at_file: 'shutter',
   model_switch: 'switch',
 };
 // Any browser_* tool (navigate, click, type, …): one scan chime per turn.

@@ -279,7 +279,7 @@ JARVIS_TOOLS = [
     "knowledge_search", "memory_manage", "user_profile_manage",
     "show_knowledge_graph", "model_switch", "open_app", "open_url", "spotify",
     "apple_notes", "start_coding_session", "coding_sessions", "send_to_session",
-    "browser_task", "chrome_tabs", "look_at_screen",
+    "browser_task", "chrome_tabs", "look_at_screen", "look_at_file",
 ]
 
 

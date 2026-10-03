@@ -7,6 +7,8 @@ import { MicButton } from './MicButton';
 import { useSpeech } from '../../hooks/useSpeech';
 import { useTTS, isLikelySelfEcho } from '../../hooks/useTTS';
 import { WAKE_EVENT, INTERRUPT_EVENT, markCommandSent } from '../../hooks/useWakeWord';
+import { NOTCH_ACTION_EVENT } from '../../hooks/useNotchBridge';
+import type { NotchCommand } from '../../notch/state';
 import type { ChatMessage, ToolCallInfo, TokenUsage, MessageTelemetry } from '../../types';
 
 // model_switch reports the model that answers now as "(claude-cli/haiku)".
@@ -82,7 +84,9 @@ export function InputArea() {
     const onWake = (e: Event) => {
       if (!speechEnabled || !speechAvailable) return;
       if (speechState !== 'idle') return;
-      if (isLikelySelfEcho()) {
+      // A tap on the notch's mic is deliberate, never an echo of JARVIS.
+      const fromNotch = (e as CustomEvent).detail === 'notch';
+      if (!fromNotch && isLikelySelfEcho()) {
         console.log('[WakeWord] Ignored self-echo:', (e as CustomEvent).detail);
         return;
       }
@@ -445,6 +449,24 @@ export function InputArea() {
     enqueueSpeech,
     stopSpeaking,
   ]);
+
+  // Commands from the notch pill (via useNotchBridge): stop JARVIS, or send a
+  // typed message / dropped file through the same path as the chat box.
+  useEffect(() => {
+    const onAction = (e: Event) => {
+      const cmd = (e as CustomEvent<NotchCommand>).detail;
+      if (cmd.type === 'stop') {
+        stopSpeaking();
+        stopStreaming();
+      } else if (cmd.type === 'send' && cmd.text.trim()) {
+        stopSpeaking();
+        autoSendAfterTranscriptionRef.current = true;
+        setInput(cmd.text.trim());
+      }
+    };
+    window.addEventListener(NOTCH_ACTION_EVENT, onAction);
+    return () => window.removeEventListener(NOTCH_ACTION_EVENT, onAction);
+  }, [stopSpeaking, stopStreaming]);
 
   // Auto-send message when transcription finishes and input is updated
   useEffect(() => {

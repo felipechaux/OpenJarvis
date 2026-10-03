@@ -300,3 +300,265 @@ html.notch-window #root {
     transition-duration: 0.01s !important;
   }
 }
+
+/* ── Hover peek: a hint line under the idle pill ── */
+.notch.notch--peek {
+  width: 340px;
+}
+.notch--peek .notch__line,
+.notch--swallow .notch__line {
+  opacity: 1;
+  transform: none;
+  color: var(--notch-muted);
+  font-size: 12px;
+}
+
+/* ── File drag: the pill opens into a drop zone, then "swallows" it ── */
+.notch.notch--drop {
+  width: 400px;
+  box-shadow: 0 0 26px rgba(0, 212, 255, 0.28);
+}
+.notch__dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  height: 64px;
+  margin: 2px 4px 0;
+  border: 1.5px dashed rgba(94, 231, 255, 0.55);
+  border-radius: 14px;
+  color: var(--notch-accent);
+  font-size: 13px;
+  animation: notch-drop-pulse 1.2s ease-in-out infinite;
+}
+.notch.notch--swallow {
+  animation: notch-swallow 0.6s var(--notch-spring);
+}
+.notch--swallow .notch__reactor {
+  opacity: 1;
+  animation: notch-catch 0.9s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ── Open panel controls: talk, stop, copy and a text box ── */
+.notch__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 2px 0;
+  border-top: 1px solid var(--notch-rule);
+}
+.notch__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid rgba(94, 231, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(94, 231, 255, 0.06);
+  color: var(--notch-accent);
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s var(--notch-spring), opacity 0.2s ease;
+}
+.notch__btn:hover:not(:disabled) {
+  background: rgba(94, 231, 255, 0.16);
+  transform: scale(1.08);
+}
+.notch__btn:active:not(:disabled) {
+  transform: scale(0.94);
+}
+.notch__btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.notch__btn--stop:not(:disabled) {
+  color: var(--notch-think);
+  border-color: rgba(255, 181, 77, 0.35);
+  background: rgba(255, 181, 77, 0.08);
+}
+.notch__ask {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  margin-left: 4px;
+  padding: 0 3px 0 12px;
+  height: 32px;
+  border: 1px solid rgba(94, 231, 255, 0.18);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  transition: border-color 0.2s ease;
+}
+.notch__ask:focus-within {
+  border-color: rgba(94, 231, 255, 0.5);
+}
+.notch__ask input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--notch-text);
+  font: inherit;
+  font-size: 13px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.notch__ask input::placeholder {
+  color: var(--notch-muted);
+}
+.notch__ask .notch__btn {
+  width: 26px;
+  height: 26px;
+  border: 0;
+}
+
+@keyframes notch-drop-pulse {
+  0%, 100% { border-color: rgba(94, 231, 255, 0.35); }
+  50% { border-color: rgba(94, 231, 255, 0.8); }
+}
+@keyframes notch-swallow {
+  0% { transform: translateX(-50%) scale(1); }
+  35% { transform: translateX(-50%) scale(0.92, 0.85); }
+  100% { transform: translateX(-50%) scale(1); }
+}
+
+/* ── Coding sessions: a busy session tints the idle bars amber ── */
+.notch--idle.notch--sessions-busy .notch__bars i {
+  background: var(--notch-think);
+  opacity: 0.85;
+  animation: notch-dots 1.6s ease-in-out infinite;
+}
+
+/* ── A session asking for permission (or a choice) ── */
+.notch.notch--asking {
+  width: 460px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.35), 0 0 22px rgba(255, 181, 77, 0.18);
+}
+.notch__prompt {
+  margin: 2px 2px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 181, 77, 0.3);
+  border-radius: 16px;
+  background: rgba(255, 181, 77, 0.06);
+  animation: notch-reveal 0.32s ease both;
+}
+.notch__panel .notch__prompt {
+  margin: 10px 0 2px;
+}
+.notch__prompt-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--notch-think);
+  font-size: 12.5px;
+  min-width: 0;
+}
+.notch__prompt-who {
+  white-space: nowrap;
+  font-weight: 600;
+}
+.notch__prompt-q {
+  color: var(--notch-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.notch__prompt-detail {
+  margin: 8px 0 0;
+  padding: 7px 9px;
+  max-height: 64px;
+  overflow: hidden;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--notch-text);
+  font: 12px/1.4 ui-monospace, 'SF Mono', Menlo, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.notch__prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 9px;
+}
+.notch__choice {
+  height: 28px;
+  padding: 0 13px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--notch-text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s var(--notch-spring);
+}
+.notch__choice:hover {
+  background: rgba(255, 255, 255, 0.14);
+  transform: scale(1.05);
+}
+.notch__choice:active {
+  transform: scale(0.95);
+}
+.notch__choice--yes {
+  border-color: rgba(94, 231, 255, 0.5);
+  background: rgba(94, 231, 255, 0.16);
+  color: var(--notch-accent);
+}
+.notch__choice--yes:hover {
+  background: rgba(94, 231, 255, 0.28);
+}
+.notch__choice--no {
+  color: #ff8a80;
+  border-color: rgba(255, 138, 128, 0.35);
+}
+
+/* ── Session chips in the open panel ── */
+.notch__sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 9px 0 1px;
+}
+.notch__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px 4px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--notch-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.notch__chip b {
+  color: var(--notch-text);
+  font-weight: 600;
+}
+.notch__chip i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #6fe39a;
+}
+.notch__chip--working i {
+  background: var(--notch-think);
+  animation: notch-blink 1.2s ease-in-out infinite;
+}
+.notch__chip--prompt i {
+  background: #ff8a80;
+  animation: notch-blink 0.8s ease-in-out infinite;
+}
+@keyframes notch-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+/* A pending prompt in the open panel leaves less room for the reply. */
+.notch__panel:has(.notch__prompt) .notch__reply {
+  max-height: 120px;
+}

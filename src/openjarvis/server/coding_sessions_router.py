@@ -435,6 +435,48 @@ async def mark_announced(event_id: int) -> Dict[str, Any]:
     return {"ok": False}
 
 
+@router.get("/live")
+async def live_sessions() -> Dict[str, Any]:
+    """Live JARVIS sessions with their state and any pending prompt (notch)."""
+    import asyncio
+
+    return {"sessions": await asyncio.to_thread(session_watcher.live)}
+
+
+@router.post("/{name}/answer")
+async def answer_prompt(name: str, request: Request) -> Dict[str, Any]:
+    """Answer the menu a session is waiting on, from the notch.
+
+    Body: ``{"prompt_id": …, "key": "1" | "2" | … | "Escape"}``.  The key is
+    pressed only if that same prompt is still on screen, so a stale click
+    never types a digit into the session's input box.  JSON content type is
+    required: it forces a CORS preflight, so other web pages cannot answer.
+    """
+    import asyncio
+
+    from openjarvis.tools import session_control as sc
+
+    if not request.headers.get("content-type", "").startswith("application/json"):
+        return {"ok": False, "error": "content-type must be application/json"}
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        return {"ok": False, "error": "invalid body"}
+    if not isinstance(body, dict):
+        return {"ok": False, "error": "invalid body"}
+    if not sc.has_session(name):
+        return {"ok": False, "error": "no such session"}
+    screen = await asyncio.to_thread(sc.capture_screen, name, 40)
+    prompt = session_watcher.parse_prompt(screen)
+    if not prompt or prompt["id"] != body.get("prompt_id"):
+        return {"ok": False, "error": "prompt no longer showing"}
+    key = str(body.get("key") or "")
+    if key not in {o["key"] for o in prompt["options"]}:
+        return {"ok": False, "error": "not an option of this prompt"}
+    await asyncio.to_thread(sc.press_keys, name, [key])
+    return {"ok": True}
+
+
 @router.get("/status")
 async def status() -> Dict[str, Any]:
     """Debug view: the app's last poll and the queued events."""
