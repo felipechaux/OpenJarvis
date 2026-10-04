@@ -507,7 +507,9 @@ def serve(
 
     from openjarvis.server.auth_middleware import check_bind_safety
 
-    check_bind_safety(bind_host, api_key=api_key)
+    check_bind_safety(
+        bind_host, api_key=api_key, device_auth=config.server.mobile.enabled
+    )
 
     # Log credential status at startup
     from openjarvis.core.credentials import TOOL_CREDENTIALS, get_credential_status

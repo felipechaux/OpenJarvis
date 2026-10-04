@@ -980,6 +980,34 @@ class AgentConfig:
 
 
 @dataclass(slots=True)
+class MobileConfig:
+    """Mobile companion app (``[server.mobile]``).
+
+    When enabled the server listens on every interface and the phone
+    authenticates with a per-device token obtained by scanning a pairing
+    QR (``jarvis mobile pair``).
+    """
+
+    enabled: bool = False
+    # URL the phone should try first, e.g. a Tailscale or tunnel address
+    # ("https://jarvis.tailnet.ts.net").  LAN addresses are always added.
+    public_url: str = ""
+    # Firebase service account JSON used to send push notifications through
+    # FCM (which also delivers to iOS via APNs).  Empty disables push.
+    fcm_service_account: str = ""
+    # APNs token auth for the iOS app (Apple Developer → Keys → .p8).
+    apns_key_path: str = ""
+    apns_key_id: str = ""
+    apns_team_id: str = ""
+    apns_topic: str = "com.felipechaux.jarvis"  # the iOS bundle id
+    apns_sandbox: bool = True  # development builds; False for TestFlight/App Store
+    # Let direct loopback requests (the desktop app) skip the token check.
+    # Requests a local proxy forwarded (X-Forwarded-For, Cf-Connecting-Ip)
+    # are never trusted, so a tunnel does not open the API.
+    trust_loopback: bool = True
+
+
+@dataclass(slots=True)
 class ServerConfig:
     """API server settings."""
 
@@ -992,6 +1020,7 @@ class ServerConfig:
     # when the server boots. The desktop app spawns a fresh server on every
     # launch, so this keeps the assistant's data current on each start.
     sync_on_startup: bool = True
+    mobile: MobileConfig = field(default_factory=MobileConfig)
     cors_origins: list = field(
         default_factory=lambda: [
             "http://localhost:3000",
@@ -2136,6 +2165,7 @@ __all__ = [
     "SandboxConfig",
     "SchedulerConfig",
     "SecurityConfig",
+    "MobileConfig",
     "ServerConfig",
     "SessionConfig",
     "SignalChannelConfig",

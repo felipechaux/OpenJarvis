@@ -13,11 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from openjarvis.server.api_routes import include_all_routes
 from openjarvis.server.chat_history_router import router as chat_history_router
 from openjarvis.server.coding_sessions_router import router as coding_sessions_router
-from openjarvis.server.media_router import router as media_router
 from openjarvis.server.comparison import comparison_router
 from openjarvis.server.connectors_router import create_connectors_router
 from openjarvis.server.dashboard import dashboard_router
 from openjarvis.server.digest_routes import create_digest_router
+from openjarvis.server.media_router import router as media_router
+from openjarvis.server.mobile_router import router as mobile_router
 from openjarvis.server.routes import router
 from openjarvis.server.upload_router import router as upload_router
 
@@ -252,7 +253,25 @@ def create_app(
     app.include_router(coding_sessions_router)
     app.include_router(media_router)
     app.include_router(chat_history_router)
+    app.include_router(mobile_router)
     include_all_routes(app)
+
+    # Mobile companion: per-device tokens, live channel and push
+    mobile_cfg = getattr(getattr(config, "server", None), "mobile", None)
+    mobile_enabled = bool(getattr(mobile_cfg, "enabled", False))
+    app.state.mobile_hub = None
+    if mobile_enabled:
+        try:
+            from openjarvis.core.events import get_event_bus
+            from openjarvis.server.mobile_router import create_mobile_hub
+
+            hub = create_mobile_hub(config, bus or get_event_bus())
+            app.state.mobile_hub = hub
+            app.add_event_handler("startup", hub.start)
+            app.add_event_handler("shutdown", hub.stop)
+        except Exception as exc:
+            logger.warning("Mobile companion init failed: %s", exc)
+            mobile_enabled = False
 
     # Restore SendBlue channel bindings from database on startup
     _restore_sendblue_bindings(app)
@@ -267,12 +286,17 @@ def create_app(
     except Exception as exc:
         logger.debug("Security middleware init skipped: %s", exc)
 
-    # API key authentication middleware
-    if api_key:
+    # API key / paired-device authentication middleware
+    if api_key or mobile_enabled:
         try:
             from openjarvis.server.auth_middleware import AuthMiddleware
 
-            app.add_middleware(AuthMiddleware, api_key=api_key)
+            app.add_middleware(
+                AuthMiddleware,
+                api_key=api_key,
+                device_auth=mobile_enabled,
+                trust_loopback=mobile_enabled and mobile_cfg.trust_loopback,
+            )
         except Exception as exc:
             logger.debug("Auth middleware init skipped: %s", exc)
 

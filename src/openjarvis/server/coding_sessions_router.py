@@ -409,6 +409,19 @@ async def get_events(
     with _lock:
         for due in progress:
             _events.append({"id": next(_ids), "ts": now, **due})
+    public, last = events_after(after, now)
+    return {"events": public, "last_id": last}
+
+
+def events_after(
+    after: int, now: float | None = None
+) -> tuple[List[Dict[str, Any]], int]:
+    """Announceable events newer than ``after`` and the last id served.
+
+    Shared by the desktop poll and the mobile channel (``/v1/mobile/ws``).
+    """
+    now = time.time() if now is None else now
+    with _lock:
         new = []
         for e in _events:
             if e["id"] <= after:
@@ -421,7 +434,12 @@ async def get_events(
         {k: v for k, v in e.items() if k != "transcript_path" and k[0] != "_"}
         for e in new
     ]
-    return {"events": public, "last_id": last}
+    return public, last
+
+
+def latest_event_id() -> int:
+    with _lock:
+        return _events[-1]["id"] if _events else 0
 
 
 @router.post("/events/{event_id}/announced")
@@ -452,20 +470,26 @@ async def answer_prompt(name: str, request: Request) -> Dict[str, Any]:
     never types a digit into the session's input box.  JSON content type is
     required: it forces a CORS preflight, so other web pages cannot answer.
     """
+    body = await _json_body(request)
+    if body is None:
+        return {"ok": False, "error": "invalid body"}
+    return await answer_session_prompt(
+        name, body.get("prompt_id"), str(body.get("key") or "")
+    )
+
+
+async def answer_session_prompt(name: str, prompt_id: Any, key: str) -> Dict[str, Any]:
+    """Press ``key`` on the menu ``name`` shows, if it is still ``prompt_id``."""
     import asyncio
 
     from openjarvis.tools import session_control as sc
 
-    body = await _json_body(request)
-    if body is None:
-        return {"ok": False, "error": "invalid body"}
     if not sc.has_session(name):
         return {"ok": False, "error": "no such session"}
     screen = await asyncio.to_thread(sc.capture_screen, name, 40)
     prompt = session_watcher.parse_prompt(screen)
-    if not prompt or prompt["id"] != body.get("prompt_id"):
+    if not prompt or prompt["id"] != prompt_id:
         return {"ok": False, "error": "prompt no longer showing"}
-    key = str(body.get("key") or "")
     if key not in {o["key"] for o in prompt["options"]}:
         return {"ok": False, "error": "not an option of this prompt"}
     await asyncio.to_thread(sc.press_keys, name, [key])
@@ -491,14 +515,22 @@ async def message_session(name: str, request: Request) -> Dict[str, Any]:
     Body: ``{"text": …}``.  Refused while the session shows a menu: Enter
     would pick its highlighted option instead of sending the text.
     """
-    import asyncio
-
-    from openjarvis.tools import session_control as sc
-
     body = await _json_body(request)
     text = str((body or {}).get("text") or "").strip()
     if body is None or not text:
         return {"ok": False, "error": "invalid body"}
+    return await message_to_session(name, text)
+
+
+async def message_to_session(name: str, text: str) -> Dict[str, Any]:
+    """Type ``text`` into session ``name`` unless it is showing a menu."""
+    import asyncio
+
+    from openjarvis.tools import session_control as sc
+
+    text = text.strip()
+    if not text:
+        return {"ok": False, "error": "empty message"}
     if not sc.has_session(name):
         return {"ok": False, "error": "no such session"}
     screen = await asyncio.to_thread(sc.capture_screen, name, 40)

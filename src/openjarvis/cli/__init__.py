@@ -125,6 +125,13 @@ except ImportError:
     pass
 
 try:
+    from openjarvis.cli.mobile_cmd import mobile
+
+    cli.add_command(mobile, "mobile")
+except ImportError:
+    pass
+
+try:
     from openjarvis.cli.tunnel_cmd import tunnel
 
     cli.add_command(tunnel, "tunnel")

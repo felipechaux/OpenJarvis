@@ -210,6 +210,126 @@ function LaunchAtLoginRow() {
   );
 }
 
+interface PairPayload { urls: string[]; expires_at: number; name: string }
+interface MobileDevice { id: string; name: string; platform: string; last_seen: number; push: { provider?: string } }
+
+/// Pair the JARVIS phone app: shows the one-time QR from
+/// ``POST /v1/mobile/pair/start`` (same as ``jarvis mobile pair``) and the
+/// paired devices.  Loopback requests from this app need no token.
+function MobilePairingSection() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [qr, setQr] = useState<{ svg: string | null; payload: PairPayload } | null>(null);
+  const [devices, setDevices] = useState<MobileDevice[]>([]);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  const [error, setError] = useState('');
+
+  const loadDevices = () =>
+    fetch(`${getBase()}/v1/mobile/devices`)
+      .then((r) => (r.ok ? r.json() : { devices: [] }))
+      .then((d) => setDevices(d.devices ?? []))
+      .catch(() => {});
+
+  useEffect(() => {
+    fetch(`${getBase()}/v1/mobile/hello`)
+      .then((r) => {
+        setEnabled(r.ok);
+        if (r.ok) loadDevices();
+      })
+      .catch(() => setEnabled(false));
+  }, []);
+
+  // Countdown for the code; refresh the device list while the QR is up so
+  // a freshly paired phone appears without reloading.
+  useEffect(() => {
+    if (!qr) return;
+    const id = setInterval(() => {
+      setNow(Date.now() / 1000);
+      loadDevices();
+    }, 2000);
+    return () => clearInterval(id);
+  }, [qr]);
+
+  const generate = async () => {
+    setError('');
+    try {
+      const r = await fetch(`${getBase()}/v1/mobile/pair/start`, { method: 'POST' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.json();
+      setQr({ svg: body.qr_svg, payload: body.payload });
+      setNow(Date.now() / 1000);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+
+  const revoke = async (id: string) => {
+    await fetch(`${getBase()}/v1/mobile/devices/${id}`, { method: 'DELETE' }).catch(() => {});
+    loadDevices();
+  };
+
+  const remaining = qr ? Math.max(0, Math.round(qr.payload.expires_at - now)) : 0;
+  const muted = { color: 'var(--color-text-tertiary)' };
+
+  return (
+    <Section title="Teléfono / Mobile app">
+      {enabled === false && (
+        <div className="text-xs" style={muted}>
+          La app móvil está desactivada. Ejecuta <code>jarvis mobile enable</code> y reinicia JARVIS.
+        </div>
+      )}
+      {enabled && (
+        <>
+          <SettingRow
+            label="Emparejar un teléfono"
+            description="Escanea el código con la app JARVIS. Vale 5 minutos y sirve una sola vez."
+          >
+            <button
+              onClick={generate}
+              className="text-sm px-3 py-1.5 rounded-lg cursor-pointer"
+              style={{ background: 'var(--color-accent)', color: 'white' }}
+            >
+              {qr && remaining > 0 ? 'Nuevo código' : 'Mostrar QR'}
+            </button>
+          </SettingRow>
+          {error && <div className="text-xs mt-2" style={{ color: 'var(--color-error)' }}>{error}</div>}
+          {qr && remaining > 0 && (
+            <div className="flex flex-col items-center gap-2 py-4">
+              {qr.svg ? (
+                <div className="rounded-lg overflow-hidden bg-white p-2" dangerouslySetInnerHTML={{ __html: qr.svg }} />
+              ) : (
+                <div className="text-xs" style={muted}>
+                  Instala el extra <code>mobile</code> para ver el QR (uv sync --extra mobile).
+                </div>
+              )}
+              <div className="text-xs" style={muted}>
+                Expira en {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')} ·{' '}
+                {qr.payload.urls.join(' · ') || 'sin dirección accesible'}
+              </div>
+            </div>
+          )}
+          {devices.map((d) => (
+            <SettingRow
+              key={d.id}
+              label={`${d.name} (${d.platform})`}
+              description={`${d.push.provider ? `push ${d.push.provider}` : 'sin push'} · ${
+                d.last_seen ? `visto ${new Date(d.last_seen * 1000).toLocaleString()}` : 'nunca visto'
+              }`}
+            >
+              <button
+                onClick={() => revoke(d.id)}
+                className="text-xs px-2 py-1 rounded-lg cursor-pointer"
+                style={{ color: 'var(--color-error)', border: '1px solid var(--color-border)' }}
+              >
+                Desvincular
+              </button>
+            </SettingRow>
+          ))}
+        </>
+      )}
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
@@ -404,6 +524,8 @@ export function SettingsPage() {
               />
             </SettingRow>
           </Section>
+
+          <MobilePairingSection />
 
           {/* Models */}
           <Section title="Models">

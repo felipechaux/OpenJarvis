@@ -175,6 +175,45 @@ fn read_toml_key(key: &str) -> String {
     String::new()
 }
 
+/// Read ``key`` inside the ``[section]`` table of ``~/.openjarvis/config.toml``
+/// (empty string when missing).  Unlike ``read_toml_key`` it ignores the
+/// same key in other tables, e.g. the many ``enabled = …`` lines.
+fn read_toml_section_key(section: &str, key: &str) -> String {
+    let path = format!("{}/.openjarvis/config.toml", home_dir());
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return String::new();
+    };
+    let header = format!("[{}]", section);
+    let mut inside = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            inside = trimmed == header;
+            continue;
+        }
+        if !inside {
+            continue;
+        }
+        if let Some((k, v)) = trimmed.split_once('=') {
+            if k.trim() == key {
+                return parse_toml_string_value(v);
+            }
+        }
+    }
+    String::new()
+}
+
+/// Bind address for the JARVIS server: every interface when the mobile
+/// companion is on (``[server.mobile] enabled = true``) so the phone can
+/// reach it — paired-device tokens then gate the API — else loopback only.
+fn server_bind_host() -> &'static str {
+    if read_toml_section_key("server.mobile", "enabled") == "true" {
+        "0.0.0.0"
+    } else {
+        "127.0.0.1"
+    }
+}
+
 /// Resolve full path to a binary by checking common locations.
 /// macOS .app bundles don't inherit the shell PATH, so we probe manually.
 fn resolve_bin(name: &str) -> String {
@@ -914,6 +953,9 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
             // ``available: false``, leaving the UI stuck on "Backend not
             // configured" even with the rest of the wake-word stack wired.
             "--extra", "speech",
+            // Mobile companion: pairing QR (segno) and push (FCM / APNs).
+            // ``uv sync`` removes extras not listed, so it must be here.
+            "--extra", "mobile",
         ])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -936,12 +978,11 @@ async fn boot_backend(backend: SharedBackend, status: SharedStatus) {
         "run",
         "jarvis",
         "serve",
-        // Bind loopback only.  Without ``--host`` the auth middleware
-        // requires ``OPENJARVIS_API_KEY`` (because it would otherwise expose
-        // the API on 0.0.0.0).  The desktop app is a local-only client, so
-        // 127.0.0.1 is both safer and avoids the auth gate.
+        // Loopback only unless the mobile companion is on (see
+        // ``server_bind_host``).  Either way the desktop's own loopback
+        // requests need no token.
         "--host",
-        "127.0.0.1",
+        server_bind_host(),
         "--port",
         &JARVIS_PORT.to_string(),
         "--model",
