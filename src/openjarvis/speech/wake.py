@@ -10,6 +10,15 @@ songs cut into 2.5 s chunks: 5 false wakes with the original tiny-only
 detector, 0 with the prompt-echo filter, greedy decoding (no temperature
 fallback) and a ``base``-model confirmation (~0.6 s, paid only when the
 tiny model fires) — with the same hit rate on spoken wake phrases.
+
+``WAKE_PROMPT`` also makes the models write "Jarvis" for names that sound
+like it, so the confirmation uses :data:`VERIFY_PROMPT`, which offers such
+names as alternatives.  Measured with Felipe's own recorded takes and
+synthetic voices: false wakes on similar names fell from 30/120 to 13/120,
+and from 24/100 to 13/100 on names the prompt does not list.  His takes were
+unaffected (61/80 → 62/80); synthetic voices lost about 10% of their hits.
+Dropping the prompt altogether is not an option: it removes every false wake
+but keeps only 4 of his 80 takes.
 """
 
 from __future__ import annotations
@@ -23,6 +32,12 @@ WAKE_PROMPT = (
     "'hey Jarvis', 'hi Jarvis', 'hello Jarvis', "
     "'oye Jarvis', 'hola Jarvis', or 'ey Jarvis' "
     "to get its attention."
+)
+
+# Names the verify prompt offers as alternatives to "Jarvis".
+_VERIFY_DISTRACTORS = ("hey charlie", "hey travis", "oye harvey", "hey marcus")
+VERIFY_PROMPT = (
+    "Hey Charlie. Hey Travis. Oye Harvey. Hey Marcus. Hey Jarvis. Oye Jarvis."
 )
 
 # Common mishearings the tiny Whisper model produces for "Jarvis" across
@@ -112,7 +127,9 @@ def is_hallucination(text: str) -> bool:
     return any(frag in lowered for frag in _HALLUCINATION_FRAGMENTS)
 
 
-def transcribe_wake(model: Any, path: str, *, beam_size: int = 1) -> str:
+def transcribe_wake(
+    model: Any, path: str, *, beam_size: int = 1, prompt: str = WAKE_PROMPT
+) -> str:
     """Transcribe a wake chunk with the settings both stages share."""
     segments, _ = model.transcribe(
         path,
@@ -129,7 +146,7 @@ def transcribe_wake(model: Any, path: str, *, beam_size: int = 1) -> str:
         vad_filter=True,
         # Bias toward the wake word — the tiny model otherwise writes
         # "Jervis" / "Travis" / "drivers" for it.
-        initial_prompt=WAKE_PROMPT,
+        initial_prompt=prompt,
     )
     return "".join(s.text for s in segments).strip().lower()
 
@@ -138,14 +155,18 @@ def detect_wake(model: Any, verify_model: Any, path: str) -> tuple[bool, str]:
     """Two-stage wake detection → ``(detected, text)``.
 
     The fast model screens every chunk; only its hits are re-checked by the
-    larger ``verify_model`` (beam search), which rejects the song lines the
-    tiny model turns into "Jarvis …".  Without a verify model the screen's
-    verdict stands.
+    larger ``verify_model`` (beam search), which rejects the song lines and
+    similar names the tiny model turns into "Jarvis …".  Without a verify
+    model the screen's verdict stands.
     """
     text = transcribe_wake(model, path)
     if not is_wake(text):
         return False, text
     if verify_model is None:
         return True, text
-    confirmed = transcribe_wake(verify_model, path, beam_size=5)
-    return is_wake(confirmed), confirmed
+    confirmed = transcribe_wake(
+        verify_model, path, beam_size=5, prompt=VERIFY_PROMPT
+    )
+    # A transcript holding a distractor is the prompt being recited.
+    recited = any(name in confirmed for name in _VERIFY_DISTRACTORS)
+    return is_wake(confirmed) and not recited, confirmed

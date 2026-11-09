@@ -8,6 +8,8 @@ from typing import List
 import pytest
 
 from openjarvis.speech.wake import (
+    VERIFY_PROMPT,
+    WAKE_PROMPT,
     detect_wake,
     is_hallucination,
     is_prompt_echo,
@@ -133,3 +135,21 @@ def test_wake_decoding_is_greedy_and_deterministic():
     assert kwargs["temperature"] == 0.0
     assert kwargs["vad_filter"] is True
     assert kwargs["beam_size"] == 1
+
+
+def test_only_the_verify_stage_uses_the_contrast_prompt():
+    screen, verify = FakeModel(["hey jarvis"]), FakeModel(["hey jarvis."])
+    detect_wake(screen, verify, "x.webm")
+    assert screen.calls[0]["initial_prompt"] == WAKE_PROMPT
+    assert verify.calls[0]["initial_prompt"] == VERIFY_PROMPT
+
+
+def test_verify_rejects_a_similar_name():
+    screen, verify = FakeModel(["hey jarvis!"]), FakeModel(["hey charlie."])
+    assert detect_wake(screen, verify, "x.webm") == (False, "hey charlie.")
+
+
+def test_verify_rejects_a_recited_prompt():
+    screen = FakeModel(["hey jarvis"])
+    verify = FakeModel(["Hey Charlie. Hey Travis. Oye Harvey. Hey Jarvis."])
+    assert detect_wake(screen, verify, "x.webm")[0] is False
