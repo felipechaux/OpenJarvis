@@ -174,7 +174,16 @@ export function useWakeWord(enabled: boolean) {
   const start = useCallback(async () => {
     if (streamRef.current) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Echo cancellation runs the mic through macOS voice processing, which
+      // ducks all other audio for as long as the mic is open.  This mic never
+      // closes, so with it on, music stayed quiet the whole time JARVIS ran.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+        },
+      });
       streamRef.current = stream;
       mimeRef.current = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
