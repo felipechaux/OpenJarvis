@@ -71,6 +71,10 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"pesta[nñ]a|tab\b|tabs\b|chrome|navegador|browser|abierto|cierra"
             r"|close|ve a|switch"
         ),
+        "smart_light": (
+            r"\bluz\b|\bluces\b|bombillo|\bfoco\b|l[aá]mpara|brillo|ilumin"
+            r"|pr[eé]nde|enci[eé]nde|ap[aá]ga|\blight|\bbulb|\blamp\b"
+        ),
         "look_at_file": (
             r"archivo|file|documento|pdf|imagen|foto|captura|/Users/|~/"
         ),

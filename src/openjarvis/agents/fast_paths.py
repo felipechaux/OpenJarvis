@@ -331,9 +331,65 @@ def _match_look_at_file(text: str) -> Optional[FastPath]:
     return None
 
 
+# ── Smart light ────────────────────────────────────────────────────────────
+
+_LIGHT = r"(?:(?:la|las|el|mi)\s+)?(?:luz|luces|bombillo|foco|l[aá]mpara)"
+
+_LIGHT_ON_RE = re.compile(
+    rf"^(?:pr[eé]nde(?:me|r)?|enci[eé]nde(?:me)?|encender)\s+{_LIGHT}$",
+    re.IGNORECASE,
+)
+_LIGHT_OFF_RE = re.compile(rf"^ap[aá]ga(?:me|r)?\s+{_LIGHT}$", re.IGNORECASE)
+_LIGHT_COLOR_RE = re.compile(
+    rf"^(?:pon(?:me)?|cambia)\s+{_LIGHT}\s+(?:(?:a|en|de)\s+)?(?:color\s+)?"
+    r"(?P<value>[a-záéíóúñ]+)$",
+    re.IGNORECASE,
+)
+_LIGHT_BRIGHTNESS_RE = re.compile(
+    rf"^(?:(?:pon(?:me)?|sube|baja|deja)\s+{_LIGHT}|(?:pon(?:me)?\s+)?(?:el\s+)?brillo)"
+    r"\s+(?:al?|en)\s+(?P<pct>\d{1,3})\s*(?:%|por\s*ciento)?$",
+    re.IGNORECASE,
+)
+
+
+def _light_reply(message: str) -> Callable[[ToolResult], Optional[str]]:
+    def reply(result: ToolResult) -> Optional[str]:
+        return message if result.success else None
+
+    return reply
+
+
+def _match_light(text: str) -> Optional[FastPath]:
+    if _LIGHT_ON_RE.match(text):
+        return FastPath(
+            "smart_light", {"action": "on"}, _light_reply("Luz encendida, señor.")
+        )
+    if _LIGHT_OFF_RE.match(text):
+        return FastPath(
+            "smart_light", {"action": "off"}, _light_reply("Luz apagada, señor.")
+        )
+    m = _LIGHT_BRIGHTNESS_RE.match(text)
+    if m and 1 <= int(m["pct"]) <= 100:
+        return FastPath(
+            "smart_light",
+            {"action": "brightness", "value": m["pct"]},
+            _light_reply(f"Brillo al {m['pct']} por ciento, señor."),
+        )
+    m = _LIGHT_COLOR_RE.match(text)
+    if m:
+        # An unknown word fails in the tool and falls through to the model.
+        return FastPath(
+            "smart_light",
+            {"action": "color", "value": m["value"].lower()},
+            _light_reply(f"Luz en {m['value'].lower()}, señor."),
+        )
+    return None
+
+
 _MATCHERS = (
     _match_look_at_screen,
     _match_model_switch,
+    _match_light,
     _match_spotify,
     _match_weather,
     _match_knowledge_graph,

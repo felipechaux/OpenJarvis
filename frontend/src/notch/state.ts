@@ -55,6 +55,7 @@ const TOOL_LABELS: Record<string, string> = {
   look_at_file: 'Revisando el archivo',
   browser_task: 'Navegando en la web',
   chrome_tabs: 'Revisando pestañas',
+  smart_light: 'Ajustando la luz',
   start_coding_session: 'Abriendo sesión de código',
   send_to_session: 'Hablando con la sesión',
   coding_sessions: 'Revisando sesiones',

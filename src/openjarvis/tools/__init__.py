@@ -167,6 +167,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.smart_light  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
 except ImportError:
     pass
