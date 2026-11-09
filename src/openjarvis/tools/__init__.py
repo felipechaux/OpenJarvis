@@ -172,6 +172,21 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.mac_mail  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.mac_files  # noqa: F401
+except ImportError:
+    pass
+
+try:
+    import openjarvis.tools.computer_task  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.digest_collect  # noqa: F401
 except ImportError:
     pass

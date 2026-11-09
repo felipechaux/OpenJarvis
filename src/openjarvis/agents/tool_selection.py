@@ -71,6 +71,18 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"pesta[nñ]a|tab\b|tabs\b|chrome|navegador|browser|abierto|cierra"
             r"|close|ve a|switch"
         ),
+        "mac_mail": (
+            r"correo|\bmail|email|gmail|bandeja|borrador|respond|redact"
+            r"|inbox|env[ií]a"
+        ),
+        "computer_task": (
+            r"\bapp\b|aplicaci[oó]n|programa|\bclic|click|computador|\bmac\b"
+            r"|calculadora|finder|calendario|recordatorios|ajusta"
+        ),
+        "mac_files": (
+            r"carpeta|folder|directorio|archivo|\bmueve|\bmover|escritorio"
+            r"|descargas|documentos"
+        ),
         "smart_light": (
             r"\bluz\b|\bluces\b|bombillo|\bfoco\b|l[aá]mpara|brillo|ilumin"
             r"|pr[eé]nde|enci[eé]nde|ap[aá]ga|\blight|\bbulb|\blamp\b"

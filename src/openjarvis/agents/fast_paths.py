@@ -386,10 +386,45 @@ def _match_light(text: str) -> Optional[FastPath]:
     return None
 
 
+# ── Email confirmation ─────────────────────────────────────────────────────
+# The only way an email can be sent: the user's own words, with no model in
+# between and no arguments, so it sends exactly the draft that was shown.
+
+_EMAIL = r"(?:(?:el|ese|este)\s+)?(?:correo|mail|email|mensaje)"
+_EMAIL_SEND_RE = re.compile(
+    rf"^(?:s[ií]\s*,?\s*)?(?:env[ií]a(?:lo|la)|env[ií]a\s+{_EMAIL}"
+    r"|confirmo\s+el\s+env[ií]o)$",
+    re.IGNORECASE,
+)
+_EMAIL_DISCARD_RE = re.compile(
+    rf"^(?:(?:cancela|descarta|borra)\s+(?:{_EMAIL}|el\s+borrador)"
+    r"|no\s+lo\s+env[ií]es)$",
+    re.IGNORECASE,
+)
+
+
+def _email_sent_reply(result: ToolResult) -> Optional[str]:
+    to = (result.metadata or {}).get("to")
+    return f"Enviado a {to}, señor." if result.success and to else None
+
+
+def _email_discarded_reply(result: ToolResult) -> Optional[str]:
+    return "Borrador descartado, señor." if result.success else None
+
+
+def _match_email(text: str) -> Optional[FastPath]:
+    if _EMAIL_SEND_RE.match(text):
+        return FastPath("mac_mail", {"action": "send"}, _email_sent_reply)
+    if _EMAIL_DISCARD_RE.match(text):
+        return FastPath("mac_mail", {"action": "discard"}, _email_discarded_reply)
+    return None
+
+
 _MATCHERS = (
     _match_look_at_screen,
     _match_model_switch,
     _match_light,
+    _match_email,
     _match_spotify,
     _match_weather,
     _match_knowledge_graph,

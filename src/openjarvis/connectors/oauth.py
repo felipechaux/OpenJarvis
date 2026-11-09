@@ -64,6 +64,8 @@ GOOGLE_ALL_SCOPES: List[str] = [
     "https://www.googleapis.com/auth/calendar.readonly",
     "https://www.googleapis.com/auth/contacts.readonly",
     "https://www.googleapis.com/auth/gmail.readonly",
+    # Drafts and sending: mac_mail replies only after the user confirms.
+    "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/tasks.readonly",
 ]
 
