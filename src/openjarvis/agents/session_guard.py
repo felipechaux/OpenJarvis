@@ -59,6 +59,11 @@ SEND_BLOCKED_MESSAGE = (
     "it is sent only when he says 'envíalo'."
 )
 
+NOTE_DELETE_BLOCKED_MESSAGE = (
+    "Blocked: JARVIS cannot delete notes by itself. Read the staged notes to "
+    "Felipe; they are deleted only when he says 'bórralas'."
+)
+
 TAINTED_ACTION_MESSAGE = (
     "Blocked by the session guard: this turn read third-party text, so the "
     "instruction could have come from that text rather than from Felipe. "
@@ -122,6 +127,10 @@ def check(call: ToolCall, tainted: bool) -> Optional[ToolResult]:
             return _refuse(call, SEND_BLOCKED_MESSAGE)
         if tainted and args.get("action") == "draft" and not args.get("reply_to"):
             return _refuse(call, TAINTED_ACTION_MESSAGE)
+    if call.name == "apple_notes":
+        args = _arguments(call)
+        if args is None or args.get("action") == "confirm_delete":
+            return _refuse(call, NOTE_DELETE_BLOCKED_MESSAGE)
     if tainted and call.name == "mac_files":
         args = _arguments(call)
         if args is None or args.get("action") != "list":

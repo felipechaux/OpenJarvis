@@ -420,11 +420,45 @@ def _match_email(text: str) -> Optional[FastPath]:
     return None
 
 
+# ── Note deletion confirmation ─────────────────────────────────────────────
+# As with email: the user's own words, no model in between, no arguments.
+
+_NOTES_DELETE_RE = re.compile(
+    r"^(?:s[ií]\s*,?\s*)?(?:b[oó]rrala|b[oó]rralas|el[ií]m[ií]nala|el[ií]m[ií]nalas"
+    r"|confirmo\s+el\s+borrado)$",
+    re.IGNORECASE,
+)
+_NOTES_CANCEL_RE = re.compile(
+    r"^(?:cancela\s+el\s+borrado|no\s+las?\s+borres)$", re.IGNORECASE
+)
+
+
+def _notes_deleted_reply(result: ToolResult) -> Optional[str]:
+    if not result.success:
+        return None
+    return "Listo, señor. Quedaron en Eliminadas recientemente por 30 días."
+
+
+def _notes_kept_reply(result: ToolResult) -> Optional[str]:
+    return "No borré nada, señor." if result.success else None
+
+
+def _match_notes_delete(text: str) -> Optional[FastPath]:
+    if _NOTES_DELETE_RE.match(text):
+        return FastPath(
+            "apple_notes", {"action": "confirm_delete"}, _notes_deleted_reply
+        )
+    if _NOTES_CANCEL_RE.match(text):
+        return FastPath("apple_notes", {"action": "cancel_delete"}, _notes_kept_reply)
+    return None
+
+
 _MATCHERS = (
     _match_look_at_screen,
     _match_model_switch,
     _match_light,
     _match_email,
+    _match_notes_delete,
     _match_spotify,
     _match_weather,
     _match_knowledge_graph,

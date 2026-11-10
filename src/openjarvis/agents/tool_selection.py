@@ -48,7 +48,7 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
         "start_coding_session": _SESSIONS,
         "coding_sessions": _SESSIONS,
         "send_to_session": _SESSIONS + r"|env[ií]a|manda|dile|escr[ií]bele",
-        "apple_notes": r"nota|notes?|apunt|anota|apple",
+        "apple_notes": r"nota|notes?|apunt|anota|apple|b[oó]rral",
         "user_profile_manage": (
             r"perfil|profile|sobre m[ií]|about me|mi trabajo|mis datos"
             r"|actualiza|update|recuerd|anota|apunta|guarda|olvid"
