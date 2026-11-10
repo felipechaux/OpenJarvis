@@ -762,13 +762,26 @@ async def transcribe_speech(request: Request):
     filename = getattr(audio_file, "filename", "audio.wav")
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "wav"
 
+    import time as _time
+
+    from openjarvis.speech import heard_log
+    from openjarvis.speech.wake import is_hallucination
+
+    started = _time.monotonic()
     result = backend.transcribe(audio_bytes, format=ext, language=language or None)
     text = result.text
     # Whisper turns silence / music into stock captions ("Gracias por
     # ver", "Subtítulos por Amara.org") that would be sent as a command.
-    from openjarvis.speech.wake import is_hallucination
-
-    if is_hallucination(text):
+    dropped = is_hallucination(text)
+    heard_log.record(
+        "drop" if dropped else "heard",
+        text,
+        audio=f"{result.duration_seconds:.1f}s",
+        took=f"{_time.monotonic() - started:.2f}s",
+        lang=result.language or language or "auto",
+        model=backend.backend_id,
+    )
+    if dropped:
         logger.info("Dropped hallucinated transcript: '%s'", text)
         text = ""
     return {
@@ -910,6 +923,9 @@ async def detect_wake_word(request: Request):
     try:
         detected, text = await loop.run_in_executor(None, _detect)
         if detected:
+            from openjarvis.speech import heard_log
+
+            heard_log.record("wake", text)
             logger.info("Wake word detected: '%s'", text)
         return {"detected": detected, "text": text}
     except Exception as exc:

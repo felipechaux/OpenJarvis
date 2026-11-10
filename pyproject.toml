@@ -120,7 +120,10 @@ mobile = ["segno>=1.6", "google-auth>=2.0", "requests>=2.31", "h2>=4.1", "crypto
 sandbox-wasm = ["wasmtime>=25"]
 sandbox-docker = ["docker>=7.0"]
 dashboard = ["textual>=0.80"]
-speech = ["faster-whisper>=1.0"]
+# mlx-whisper runs Whisper on the Apple GPU (large-v3-turbo in ~0.8 s);
+# faster-whisper is the CPU path everywhere else.  The desktop app syncs
+# exactly this extra, so both must live here.
+speech = ["faster-whisper>=1.0", "mlx-whisper>=0.4.3 ; sys_platform == 'darwin'"]
 speech-deepgram = ["deepgram-sdk>=3.0"]
 eval-wandb = ["wandb>=0.17"]
 eval-sheets = ["gspread>=6.0", "google-auth>=2.0"]
@@ -142,7 +145,6 @@ docs = [
     "mkdocs-gen-files>=0.5",
     "mkdocs-literate-nav>=0.6",
 ]
-
 [project.urls]
 Homepage = "https://github.com/open-jarvis/OpenJarvis"
 Documentation = "https://open-jarvis.github.io/OpenJarvis/"

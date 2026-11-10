@@ -9,8 +9,10 @@ if TYPE_CHECKING:
     from openjarvis.core.config import JarvisConfig
     from openjarvis.speech._stubs import SpeechBackend
 
-# Priority order: local first, then cloud
+# Priority order: local first, then cloud.  On Apple Silicon the GPU
+# backend runs large-v3-turbo as fast as the CPU runs ``small``.
 DISCOVERY_ORDER = [
+    "mlx-whisper",
     "faster-whisper",
     "openai",
     "deepgram",
@@ -30,7 +32,9 @@ def _create_backend(
     try:
         backend_cls = SpeechRegistry.get(key)
 
-        if key == "faster-whisper":
+        if key == "mlx-whisper":
+            return backend_cls(model=config.speech.model)
+        elif key == "faster-whisper":
             return backend_cls(
                 model_size=config.speech.model,
                 device=config.speech.device,

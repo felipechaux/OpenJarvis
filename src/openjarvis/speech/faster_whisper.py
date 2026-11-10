@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from openjarvis.core.registry import SpeechRegistry
 from openjarvis.speech._stubs import Segment, SpeechBackend, TranscriptionResult
+from openjarvis.speech.prompts import stt_prompt
 
 try:
     from faster_whisper import WhisperModel
@@ -27,16 +28,6 @@ class FasterWhisperBackend(SpeechBackend):
     """Local speech-to-text using Faster-Whisper (CTranslate2)."""
 
     backend_id = "faster-whisper"
-
-    # General-purpose prompt that biases Whisper toward an assistant-style
-    # bilingual dictation context.  Hands the model a hint about the speaker
-    # and the wake word so it doesn't transcribe "Jarvis" as "Jervis" /
-    # "Travis", and it understands ES/EN code-switching.
-    _DEFAULT_PROMPT = (
-        "The user is dictating commands or questions to an AI assistant "
-        "named Jarvis. They speak both English and Spanish and may switch "
-        "between them mid-sentence."
-    )
 
     def __init__(
         self,
@@ -117,9 +108,9 @@ class FasterWhisperBackend(SpeechBackend):
             #
             # Greedy decoding on large-v3-turbo is already very accurate
             # (the "turbo" model is purpose-built for low-latency runs),
-            # and ``vad_filter`` + the bilingual ``initial_prompt`` keep
-            # the main hallucination sources (silence, ES/EN code-switch)
-            # under control without the extra beam search cost.
+            # and ``vad_filter`` + the prompt in the user's language (see
+            # speech/prompts.py) keep the main hallucination sources
+            # (silence, wrong language) under control without beam search.
             kwargs = {
                 "beam_size": 1,
                 "best_of": 1,
@@ -128,7 +119,7 @@ class FasterWhisperBackend(SpeechBackend):
                 "no_speech_threshold": 0.6,
                 "vad_filter": True,
                 "vad_parameters": {"min_silence_duration_ms": 500},
-                "initial_prompt": self._DEFAULT_PROMPT,
+                "initial_prompt": stt_prompt(language),
             }
             if language:
                 kwargs["language"] = language
