@@ -15,13 +15,14 @@ Output is the bulb's name and state, so this tool is in
 from __future__ import annotations
 
 import colorsys
+import difflib
 import json
 import os
 import re
 import tempfile
 import unicodedata
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from openjarvis.core.config import DEFAULT_CONFIG_DIR
 from openjarvis.core.registry import ToolRegistry
@@ -67,6 +68,24 @@ WHITE_TONES = {
 }
 
 _HEX_RE = re.compile(r"^#?[0-9a-f]{6}$")
+
+# Colour names arrive from speech recognition, which on two-word commands
+# turns "rosa" into "losa", "cálida" into "cali" and "fría" into "frito"
+# (seen in heard.log, 2026-11-09).  A near miss is taken as the closest
+# known name: a wrong colour costs nothing and is undone by the next order.
+# 0.72 accepts those three and rejects "freya"/"fria" (0.67) and unrelated
+# words; exact names are always tried first.
+FUZZY_CUTOFF = 0.72
+
+
+def _known(word: str, names: Any) -> Optional[str]:
+    """*word* itself when it is in *names*, else the closest name or None."""
+    if word in names:
+        return word
+    if not word.isalpha():
+        return None
+    close = difflib.get_close_matches(word, list(names), n=1, cutoff=FUZZY_CUTOFF)
+    return close[0] if close else None
 
 
 class LightError(RuntimeError):
@@ -164,8 +183,9 @@ def _percent(value: str) -> int:
 
 def _parse_colour(value: str) -> tuple[int, int]:
     word = _word(value)
-    if word in COLOURS:
-        return COLOURS[word]
+    name = _known(word, COLOURS)
+    if name:
+        return COLOURS[name]
     if _HEX_RE.match(word):
         raw = word.lstrip("#")
         r, g, b = (int(raw[i : i + 2], 16) / 255 for i in (0, 2, 4))
@@ -179,8 +199,9 @@ def _parse_colour(value: str) -> tuple[int, int]:
 def _set_white(dev: Any, tone: str) -> str:
     values: Dict[str, Any] = {DP_POWER: True, DP_MODE: MODE_WHITE}
     word = _word(tone)
-    if word in WHITE_TONES:
-        temperature = WHITE_TONES[word]
+    name = _known(word, WHITE_TONES)
+    if name:
+        temperature = WHITE_TONES[name]
     elif word:
         temperature = _percent(word) * 10
     else:
@@ -188,12 +209,22 @@ def _set_white(dev: Any, tone: str) -> str:
     if temperature is not None:
         values[DP_TEMP] = temperature
     _send(dev, values)
-    return f"white{f' ({tone})' if tone else ''}"
+    return f"white{f' ({name or word})' if word else ''}{_heard(word, name)}"
+
+
+def _heard(word: str, name: Optional[str]) -> str:
+    """A note when a misheard word was mapped to a known name."""
+    return f" (heard '{word}')" if name and name != word else ""
 
 
 def _set_colour(dev: Any, value: str) -> str:
-    if _word(value) in WHITE_TONES:
+    word = _word(value)
+    tone = _known(word, WHITE_TONES)
+    if tone:
         return _set_white(dev, value)
+    name = _known(word, COLOURS)
+    if name:
+        value = name
     hue, sat = _parse_colour(value)
     level = _level(_state(dev))
     _send(
@@ -204,7 +235,7 @@ def _set_colour(dev: Any, value: str) -> str:
             DP_COLOUR: _colour_hex(hue, sat, level),
         },
     )
-    return f"colour {value}"
+    return f"colour {value}{_heard(word, name)}"
 
 
 def _set_brightness(dev: Any, value: str) -> str:

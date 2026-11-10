@@ -340,8 +340,11 @@ _LIGHT_ON_RE = re.compile(
     re.IGNORECASE,
 )
 _LIGHT_OFF_RE = re.compile(rf"^ap[aá]ga(?:me|r)?\s+{_LIGHT}$", re.IGNORECASE)
+# Spoken colour orders are often verb-less ("la luz verde", "color rosado",
+# "luz cálida"): the light noun or the word color/tono is what marks them.
 _LIGHT_COLOR_RE = re.compile(
-    rf"^(?:pon(?:me)?|cambia)\s+{_LIGHT}\s+(?:(?:a|en|de)\s+)?(?:color\s+)?"
+    rf"^(?:(?:pon(?:me|la)?|cambia(?:la)?|deja(?:la)?)\s+)?"
+    rf"(?:{_LIGHT}\s+(?:(?:a|en|de)\s+)?(?:(?:color|tono)\s+)?|(?:color|tono)\s+)"
     r"(?P<value>[a-záéíóúñ]+)$",
     re.IGNORECASE,
 )
@@ -381,9 +384,19 @@ def _match_light(text: str) -> Optional[FastPath]:
         return FastPath(
             "smart_light",
             {"action": "color", "value": m["value"].lower()},
-            _light_reply(f"Luz en {m['value'].lower()}, señor."),
+            _light_colour_reply,
         )
     return None
+
+
+def _light_colour_reply(result: ToolResult) -> Optional[str]:
+    """Names the colour the tool applied, which may differ from the word
+    heard ("losa" is set as rosa)."""
+    if not result.success:
+        return None
+    m = re.search(r"colour (\S+)|white \((\S+)\)", result.content)
+    name = next((g for g in m.groups() if g), None) if m else None
+    return f"Luz en {name}, señor." if name else "Luz cambiada, señor."
 
 
 # ── Email confirmation ─────────────────────────────────────────────────────

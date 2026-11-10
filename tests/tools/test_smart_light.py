@@ -164,6 +164,12 @@ def test_output_is_trusted():
         ("enciende la lámpara", {"action": "on"}),
         ("pon la luz azul", {"action": "color", "value": "azul"}),
         ("cambia la luz a color verde", {"action": "color", "value": "verde"}),
+        # Spoken orders often come without a verb.
+        ("La luz verde.", {"action": "color", "value": "verde"}),
+        ("Color rosado.", {"action": "color", "value": "rosado"}),
+        ("La luz de color violeta.", {"action": "color", "value": "violeta"}),
+        ("luz cálida", {"action": "color", "value": "cálida"}),
+        ("pon la luz en tono frío", {"action": "color", "value": "frío"}),
         ("pon el brillo al 50%", {"action": "brightness", "value": "50"}),
         ("baja la luz al 30 por ciento", {"action": "brightness", "value": "30"}),
     ],
@@ -176,10 +182,50 @@ def test_fast_path_matches(text, arguments):
 
 @pytest.mark.parametrize(
     "text",
-    ["apaga la luz y pon música", "pon el brillo al 500", "apaga el computador"],
+    [
+        "apaga la luz y pon música", "pon el brillo al 500", "apaga el computador",
+        "hola", "verde", "la luz", "qué luz tan bonita",
+    ],
 )
 def test_fast_path_leaves_the_rest_to_the_model(text):
     assert match_fast_path(text, {"smart_light"}) is None
+
+
+@pytest.mark.parametrize(
+    ("heard", "sent", "label"),
+    [
+        ("losa", {"20": True, "21": "colour", "24": "014a025803e8"}, "rosa"),
+        ("frito", {"20": True, "21": "white", "23": 1000}, "frio"),
+        ("cali", {"20": True, "21": "white", "23": 0}, "calid"),
+    ],
+)
+def test_misheard_colours_map_to_the_closest_name(bulb, heard, sent, label):
+    result = SmartLightTool().execute(action="color", value=heard)
+    assert result.success and bulb.sent == [sent]
+    assert label in result.content and f"heard '{heard}'" in result.content
+
+
+@pytest.mark.parametrize("word", ["hola", "freya", "x", "123"])
+def test_unrelated_words_are_still_unknown(bulb, word):
+    result = SmartLightTool().execute(action="color", value=word)
+    assert not result.success and bulb.sent == []
+
+
+def test_hex_colours_still_work(bulb):
+    assert SmartLightTool().execute(action="color", value="#ff0000").success
+
+
+def test_fast_path_reply_names_the_colour_set():
+    path = match_fast_path("la luz losa", {"smart_light"})
+    ok = ToolResult(
+        tool_name="smart_light", content="Bombillo: colour rosa (heard 'losa')",
+        success=True,
+    )
+    assert path.reply(ok) == "Luz en rosa, señor."
+    tone = ToolResult(
+        tool_name="smart_light", content="Bombillo: white (fria)", success=True
+    )
+    assert path.reply(tone) == "Luz en fria, señor."
 
 
 def test_fast_path_failure_goes_back_to_the_model():
