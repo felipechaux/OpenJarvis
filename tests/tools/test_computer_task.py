@@ -12,6 +12,7 @@ from openjarvis.core.types import ToolCall
 from openjarvis.tools import computer_mcp, computer_task
 from openjarvis.tools.computer_mcp import ActionRefused
 from openjarvis.tools.computer_task import ComputerTaskTool
+from openjarvis.tools.displays import Display
 
 
 def rpc(method, params=None):
@@ -40,8 +41,24 @@ def test_no_shell_or_file_tool_is_exposed():
 
 
 def test_coordinates_map_from_image_to_screen(monkeypatch):
-    monkeypatch.setattr(computer_mcp, "_display_size", lambda: (1568.0 * 2, 1000.0))
+    monkeypatch.setattr(
+        computer_mcp.displays, "active_displays",
+        lambda: [Display(1, 0, 0, 1568.0 * 2, 1000.0, main=True)],
+    )
     assert computer_mcp._to_screen(100, 50) == (200, 100)
+
+
+def test_coordinates_reach_the_second_monitor(monkeypatch):
+    laptop = Display(1, 0, 0, 1470, 956, main=True, builtin=True)
+    monitor = Display(2, 1470, 0, 1920, 1080)
+    monkeypatch.setattr(
+        computer_mcp.displays, "active_displays", lambda: [laptop, monitor]
+    )
+    lay = computer_mcp._layout()
+    tile = lay.tiles[1]
+    assert tile.display == monitor
+    x, y = computer_mcp._to_screen(tile.left + 10 * lay.scale, tile.top)
+    assert (round(x), round(y)) == (1480, 0)
 
 
 @pytest.mark.parametrize(

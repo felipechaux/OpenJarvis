@@ -91,7 +91,7 @@ _TOOL_TRIGGERS: dict[str, re.Pattern[str]] = {
             r"archivo|file|documento|pdf|imagen|foto|captura|/Users/|~/"
         ),
         "look_at_screen": (
-            r"pantalla|screen|\bves\b|\bmira\b|\besto\b|\besta\b|aqu[ií]"
+            r"pantalla|screen|monitor|\bves\b|\bmira\b|\besto\b|\besta\b|aqu[ií]"
             r"|abierto|ventana|window|error|see\b|look"
         ),
         "get_weather": (

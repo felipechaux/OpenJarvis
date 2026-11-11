@@ -24,6 +24,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from openjarvis.tools import displays
+
 MAX_IMAGE_SIDE = 1568
 _APP_SERVICES = (
     "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
@@ -117,21 +119,15 @@ def _check_target(bundle: Optional[str]) -> None:
         )
 
 
-def _display_size() -> tuple[float, float]:
-    import Quartz
-
-    bounds = Quartz.CGDisplayBounds(Quartz.CGMainDisplayID())
-    return bounds.size.width, bounds.size.height
-
-
-def _scale() -> float:
-    """Image pixels per screen point in the screenshots this server returns."""
-    return MAX_IMAGE_SIDE / max(_display_size())
+def _layout() -> displays.Layout:
+    """Where each screen sits in the screenshots this server returns.  Derived
+    from the current displays, so clicks map the same way the last shot did."""
+    return displays.layout(displays.active_displays(), MAX_IMAGE_SIDE)
 
 
 def _to_screen(x: float, y: float) -> tuple[float, float]:
-    scale = _scale()
-    return x / scale, y / scale
+    """Image pixel → global screen point (any monitor)."""
+    return _layout().to_screen(x, y)
 
 
 def screenshot() -> Dict[str, Any]:
@@ -144,16 +140,12 @@ def screenshot() -> Dict[str, Any]:
         )
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "screen.jpg"
-        subprocess.run(
-            ["screencapture", "-x", "-m", "-t", "jpg", str(path)],
-            check=True, capture_output=True, timeout=15,
-        )
-        subprocess.run(
-            ["sips", "-Z", str(MAX_IMAGE_SIDE), str(path)],
-            check=True, capture_output=True, timeout=15,
-        )
+        lay = displays.capture(path, MAX_IMAGE_SIDE)
         data = base64.b64encode(path.read_bytes()).decode()
-    return {"type": "image", "data": data, "mimeType": "image/jpeg"}
+    return [
+        {"type": "image", "data": data, "mimeType": "image/jpeg"},
+        {"type": "text", "text": lay.describe()},
+    ]
 
 
 def click(x: float, y: float, button: str = "left", double: bool = False) -> str:
@@ -257,8 +249,8 @@ _STRING = {"type": "string"}
 TOOLS = [
     {
         "name": "screenshot",
-        "description": "See the main screen. Coordinates in other tools are "
-        "pixels of this image.",
+        "description": "See every connected screen, tiled into one image. "
+        "Coordinates in other tools are pixels of this image.",
         "inputSchema": _schema({}, []),
     },
     {
@@ -313,7 +305,7 @@ _FUNCTIONS = {
 def call_tool(name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     try:
         if name == "screenshot":
-            return {"content": [screenshot()]}
+            return {"content": screenshot()}
         if name not in _FUNCTIONS:
             raise ValueError(f"Unknown tool '{name}'.")
         text = _FUNCTIONS[name](**arguments)

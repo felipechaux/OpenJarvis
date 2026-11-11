@@ -16,7 +16,10 @@ def _setup(monkeypatch):
     quota.clear()
     monkeypatch.setattr(screen.sys, "platform", "darwin")
     monkeypatch.setattr(screen, "_has_screen_permission", lambda: True)
-    monkeypatch.setattr(screen, "capture", lambda path: path.write_bytes(b"jpg"))
+    monkeypatch.setattr(
+        screen, "capture",
+        lambda path, which="all": path.write_bytes(b"jpg") and "SCREENS",
+    )
     monkeypatch.setattr(
         screen, "_vision_models",
         lambda: [m for m in ("claude-cli/haiku", "antigravity/flash")
@@ -100,3 +103,31 @@ def test_questions_about_the_screen_go_to_the_model():
 
 def test_timeout_leaves_room_for_the_vision_fallback():
     assert LookAtScreenTool().spec.timeout_seconds >= 120
+
+
+def test_screen_choice_and_layout_reach_capture_and_prompt(monkeypatch):
+    seen = {}
+
+    def fake_capture(path, which="all"):
+        seen["which"] = which
+        path.write_bytes(b"jpg")
+        return "The image shows 2 screens stacked top to bottom"
+
+    monkeypatch.setattr(screen, "capture", fake_capture)
+    engine = _use(monkeypatch, {"claude-cli/haiku": "Veo dos pantallas."})
+    LookAtScreenTool().execute(screen="external")
+    assert seen["which"] == "external"
+    assert "2 screens stacked" in engine.calls[0][2]
+
+
+def test_unknown_screen_choice_means_all(monkeypatch):
+    seen = {}
+    def fake_capture(path, which="all"):
+        seen["which"] = which
+        path.write_bytes(b"jpg")
+        return ""
+
+    monkeypatch.setattr(screen, "capture", fake_capture)
+    _use(monkeypatch, {"claude-cli/haiku": "ok"})
+    LookAtScreenTool().execute(screen="la de la izquierda")
+    assert seen["which"] == "all"
